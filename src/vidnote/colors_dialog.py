@@ -20,7 +20,7 @@ from . import colors
 class ColorListDialog(QDialog):
     def __init__(self, entries: List[Tuple[str, str]], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Text box colours")
+        self.setWindowTitle("Box and arrow colours")
         self.resize(420, 320)
         self._entries = list(entries)
 
@@ -49,7 +49,8 @@ class ColorListDialog(QDialog):
     def _accept(self) -> None:
         entries, skipped = colors.parse_color_list(self.edit.toPlainText())
         if not entries:
-            QMessageBox.warning(self, "Text box colours", "Add at least one valid colour line.")
+            QMessageBox.warning(self, self.windowTitle(),
+                                "Add at least one valid colour line.")
             return
         if skipped:
             lines = "\n".join(f"line {n}: {err}" for n, _l, err in skipped[:10])

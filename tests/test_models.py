@@ -1,10 +1,14 @@
 import pytest
 
 from vidnote.models import (
+    ARROW,
     BLUR,
     DEFAULT_BOX_COLOR,
+    DEFAULT_END_STYLE,
     DEFAULT_SIZE,
+    DEFAULT_START_STYLE,
     DEFAULT_TEXT_COLOR,
+    DEFAULT_THICKNESS,
     TEXT,
     Annotation,
 )
@@ -56,3 +60,50 @@ def test_style_defaults():
 
 def test_blur_ignores_text_style_fields():
     Annotation(BLUR, 1, 2, 0, 0, 50, 50, size=1, box_color="nope", text_color="nope").validate()
+
+
+def _arrow(**kw):
+    base = dict(x2=100, y2=50)
+    base.update(kw)
+    return Annotation(ARROW, 1, 2, 10, 20, **base)
+
+
+def test_arrow_defaults_validate():
+    a = _arrow()
+    a.validate()
+    assert (a.thickness, a.start_style, a.end_style) == (4, "none", "arrow")
+    assert (DEFAULT_THICKNESS, DEFAULT_START_STYLE, DEFAULT_END_STYLE) == (4, "none", "arrow")
+
+
+@pytest.mark.parametrize("kw", [
+    dict(x2=10, y2=20),  # identical points
+    dict(thickness=0),
+    dict(thickness=31),
+    dict(color="red"),
+    dict(color="#GGG"),
+    dict(start_style="dot"),
+    dict(end_style="Arrow"),
+])
+def test_arrow_validate_rejects(kw):
+    with pytest.raises(ValueError):
+        _arrow(**kw).validate()
+
+
+@pytest.mark.parametrize("kw", [
+    dict(thickness=1), dict(thickness=30), dict(color="E03131"),
+    dict(start_style="arrow", end_style="arrow"), dict(start_style="none", end_style="none"),
+    dict(x2=10, y2=21),
+])
+def test_arrow_validate_accepts(kw):
+    _arrow(**kw).validate()
+
+
+def test_arrow_still_checks_times():
+    with pytest.raises(ValueError):
+        Annotation(ARROW, 3, 3, 0, 0, x2=5, y2=5).validate()
+    with pytest.raises(ValueError):
+        Annotation(ARROW, -1, 3, 0, 0, x2=5, y2=5).validate()
+
+
+def test_arrow_ignores_box_size_and_text_fields():
+    _arrow(w=0, h=0, text="", size=1, box_color="nope", text_color="nope").validate()
