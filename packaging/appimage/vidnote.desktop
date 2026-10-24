@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=vidnote
+Comment=Annotate videos with text, blur and arrows
+Exec=vidnote %f
+Icon=vidnote
+Categories=AudioVideo;Video;
+Terminal=false
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;

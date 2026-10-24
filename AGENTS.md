@@ -18,6 +18,7 @@ PySide6 desktop tool: pick coordinates on a video, write a plain-text annotation
 - `main_window.py` (the bulk of the GUI) uses `video_view` (draw and select modes, move/resize handles); `colors_dialog.py` edits the box colour list stored in `QSettings`; `__main__:main` is the `vidnote` entrypoint.
 - `textfit.py`: text layout at a user-chosen font size (`layout_text`); there is no auto-fit. `scripts/annotate.sh` mirrors it (`PAD`, `LINE_H_PM`, `ADV_PM`); keep both in sync.
 - `arrowgeom.py`: arrow shape (shaft + heads, head size from thickness) used by the canvas preview and the tests. `scripts/annotate.sh` mirrors it in the `geq` alpha expression of the per-arrow overlay PNG (`HEAD_*`, `ARROW_ALPHA`, padding); keep both in sync. `overlay` rounds positions down to even coordinates on yuv420p, so the script rounds the image origin itself.
+- `packaging/appimage/`: `python-appimage` recipe plus `build.sh` (writes `dist/vidnote-<version>-x86_64.AppImage`). The entry point sets `VIDNOTE_SCRIPT` to the bundled `annotate.sh`. The release workflow is `.github/workflows/release.yml` (manual trigger only, `main` only; the tag must equal the `pyproject.toml` version).
 
 ## Annotation format (two implementations must stay in sync)
 
