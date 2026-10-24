@@ -217,7 +217,7 @@ because it bundles the full PySide6 wheel (`QtMultimedia` is not in
 ```plaintext
 src/vidnote/  __main__.py, main_window.py, video_view.py, colors_dialog.py,
               models.py, exporter.py, colors.py, textfit.py, arrowgeom.py
-scripts/annotate.sh
+scripts/      annotate.sh (render), clean.sh (remove build output, caches, .venv)
 tests/        test_models.py, test_exporter.py, test_colors.py, test_textfit.py,
               test_arrowgeom.py, test_annotate_sh.py
 examples/annotations.txt
@@ -238,6 +238,44 @@ ruff check src tests
 so `mapToScene()` on a click returns exact video pixels regardless of scaling or
 letterboxing. `models.py`, `exporter.py`, `colors.py`, `textfit.py` and
 `arrowgeom.py` have no Qt imports and are testable without a display.
+
+## Cleaning up
+
+The checkout grows large (about 1 GB): `.venv` is the biggest part (about 730
+MB, almost all of it PySide6), then `dist/` (the AppImage, about 235 MB) and
+`build/` (AppImage build leftovers). Everything below is regenerated on demand.
+
+```bash
+./scripts/clean.sh --dry-run   # list what would be removed, with sizes
+./scripts/clean.sh             # build/, dist/, *.egg-info, __pycache__, .pytest_cache, .ruff_cache
+./scripts/clean.sh --venv      # the same, plus .venv (runtime and dev dependencies)
+```
+
+Run `./run.sh` (or the manual install) again to recreate `.venv`. The script
+never touches your videos, annotation files or the app settings.
+
+By hand, or to clear only part of the environment:
+
+```bash
+# dev tools only (pytest, ruff); the app keeps working
+source .venv/bin/activate
+pip uninstall -y pytest ruff
+
+# everything, runtime and dev (equivalent to clean.sh --venv)
+deactivate 2>/dev/null; rm -rf .venv
+
+# build outputs and caches only
+rm -rf build dist src/vidnote.egg-info .pytest_cache .ruff_cache
+
+# pip's download cache (outside the project, shared by all virtualenvs)
+pip cache purge
+```
+
+The dev tools are small; the size is the runtime dependency, so the only real
+saving is removing `.venv` while you are not using the app from source (the
+AppImage does not need it). The window geometry and the colour list are stored
+outside the project in `~/.config/vidnote/vidnote.conf`; delete that file to
+reset them.
 
 ## Troubleshooting
 
