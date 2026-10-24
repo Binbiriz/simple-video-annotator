@@ -28,7 +28,11 @@ Manual: `python3 -m venv .venv && source .venv/bin/activate && pip install -e . 
 
 ## Usage
 
-1. Open a video (`Ctrl+O`).
+1. Open a video (`Ctrl+O`). In draw mode, the yellow marker for a picked region or line follows
+   the position and size fields; a plain click shows a small square that disappears after about
+   a second. The marker is also removed when you add, update, delete or load annotations, open a
+   video, change the type, toggle **Select** or select an annotation. `Escape` cancels a drag in
+   progress.
 2. Seek to the start (`Space` play/pause, `Left`/`Right` one frame, `Shift+Left`/`Right` one second)
    and press `[` to set **Start**; seek to the end and press `]` to set **End**.
 3. Text and blur: drag a rectangle on the video; for text, also type the words and choose the
@@ -53,6 +57,9 @@ Manual: `python3 -m venv .venv && source .venv/bin/activate && pip install -e . 
    clicked: the click area is at least 8 screen pixels wide.
    Annotations that are not active at the current time can be selected from the list and then
    edited on the canvas too. Switch **Select** off to draw new regions again.
+   The selected annotation is outlined in yellow: solid while it is active at the current time,
+   dimmer and dashed otherwise (still editable). The outline follows the position and size
+   fields.
 7. Toolbar **Hide preview** (it then reads **Show preview**) hides every preview item on the canvas (boxes, text, arrows, highlight,
    handles) without touching the annotations; toggle it off or select a list row to bring them
    back.

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import colors, exporter, textfit
+from . import canvasstate, colors, exporter, textfit
 from .colors_dialog import ColorListDialog
 from .models import (
     ARROW,
@@ -145,6 +145,12 @@ class MainWindow(QMainWindow):
         self.player.setAudioOutput(self.audio)
         self.view = VideoView()
         self.player.setVideoOutput(self.view.video_item)
+
+        self._marker = canvasstate.MarkerState()
+        self._marker_timer = QTimer(self)
+        self._marker_timer.setSingleShot(True)
+        self._marker_timer.setInterval(canvasstate.POINT_MARKER_MS)
+        self._marker_timer.timeout.connect(self._on_marker_timeout)
 
         self._build_ui()
         self._build_actions()
@@ -364,7 +370,7 @@ class MainWindow(QMainWindow):
         self.select_action = QAction("Select", self)
         self.select_action.setCheckable(True)
         self.select_action.setToolTip("Select mode: click, move and resize annotations")
-        self.select_action.toggled.connect(self.view.set_mode)
+        self.select_action.toggled.connect(self._on_mode_toggled)
         tools.addAction(self.select_action)
         self.hide_action = QAction("Hide preview", self)
         self.hide_action.setCheckable(True)
@@ -384,6 +390,10 @@ class MainWindow(QMainWindow):
         self.view.geometryEdited.connect(self._on_geometry_edited)
         self.view.lineSelected.connect(self._on_line)
         self.view.arrowEdited.connect(self._on_arrow_edited)
+        self.view.dragStarted.connect(self._clear_marker)
+        for spin in (self.x_spin, self.y_spin, self.w_spin, self.h_spin,
+                     self.x2_spin, self.y2_spin):
+            spin.valueChanged.connect(self._on_geometry_field_changed)
         self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         self.size_spin.valueChanged.connect(self._update_overlays)
         self.box_combo.currentIndexChanged.connect(self._update_overlays)
@@ -412,6 +422,8 @@ class MainWindow(QMainWindow):
         self.video_path = p.resolve()
         self.setWindowTitle(f"vidnote - {p.name}")
         self.player.setSource(QUrl.fromLocalFile(str(self.video_path)))
+        self._clear_marker()
+        self.table.clearSelection()
         self.player.pause()  # shows the first frame
         self.statusBar().showMessage(str(self.video_path))
 
@@ -483,6 +495,7 @@ class MainWindow(QMainWindow):
                     a = self._with_form_style(a)  # live preview of unsaved style changes
                 items.append((i, a))
         self.view.set_overlays(items)
+        self._sync_selection_dim()
 
     def _with_form_style(self, a: Annotation) -> Annotation:
         if a.kind == ARROW:
@@ -521,6 +534,7 @@ class MainWindow(QMainWindow):
         for widget in (self.x2_spin, self.y2_spin, self.thickness_spin,
                        self.start_style_combo, self.end_style_combo):
             widget.setEnabled(is_arrow)
+        self._clear_marker()
         self.view.set_draw_line(is_arrow)
 
     # ---- colour list ----------------------------------------------------------------
@@ -566,18 +580,78 @@ class MainWindow(QMainWindow):
         idx = self.box_combo.findData(hex_value) if hex_value else -1
         self.box_combo.setCurrentIndex(max(idx, 0))
 
+    # ---- yellow canvas graphics -----------------------------------------------------
+    def _form_geometry(self) -> canvasstate.FormGeometry:
+        return canvasstate.FormGeometry(
+            self.x_spin.value(), self.y_spin.value(), self.w_spin.value(), self.h_spin.value(),
+            self.x2_spin.value(), self.y2_spin.value())
+
+    def _show_marker(self) -> None:
+        self.view.set_marker(self._marker.shape(self._form_geometry()))
+
+    def _clear_marker(self) -> None:
+        self._marker.clear()
+        self._marker_timer.stop()
+        self.view.set_marker(None)
+        self._sync_selection_highlight()  # it may go back to following the form
+
+    def _on_marker_timeout(self) -> None:
+        if self._marker.expire_point():
+            self._clear_marker()
+
+    def _sync_selection_highlight(self) -> None:
+        row = self._selected_row()
+        if row is None or row >= len(self.annotations):
+            self.view.set_selected(None, None)
+            return
+        a = self.annotations[row]
+        geom = canvasstate.selection_geometry(
+            a, self._kind(), self._form_geometry(), self._marker.active)
+        if a.kind == ARROW:
+            self.view.set_selected(row, None, arrow=geom)
+        else:
+            self.view.set_selected(row, QRectF(*geom))
+        self._sync_selection_dim()
+
+    def _sync_selection_dim(self) -> None:
+        row = self._selected_row()
+        if row is not None and row < len(self.annotations):
+            self.view.set_selection_dim(canvasstate.selection_dimmed(
+                self.annotations[row], self.player.position() / 1000.0))
+
+    def _on_geometry_field_changed(self) -> None:
+        if self._marker.active:
+            self._show_marker()  # the marker moves with the form
+        self._sync_selection_highlight()
+
+    def _on_mode_toggled(self, select: bool) -> None:
+        self._clear_marker()
+        self.view.set_mode(select)
+
     def _on_region(self, x: int, y: int, w: int, h: int) -> None:
+        is_region = w > 0 and h > 0 and self._kind() != ARROW
+        self._marker.pick(canvasstate.REGION if is_region else canvasstate.POINT)
         self.x_spin.setValue(x)
         self.y_spin.setValue(y)
-        if w > 0 and h > 0 and self._kind() != ARROW:
+        if is_region:
             self.w_spin.setValue(w)
             self.h_spin.setValue(h)
+        self._show_marker()
+        if is_region:
+            self._marker_timer.stop()
+        else:
+            self._marker_timer.start()  # restarts when already running
+        self._sync_selection_highlight()
 
     def _on_line(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        self._marker.pick(canvasstate.LINE)
+        self._marker_timer.stop()
         self.x_spin.setValue(x1)
         self.y_spin.setValue(y1)
         self.x2_spin.setValue(x2)
         self.y2_spin.setValue(y2)
+        self._show_marker()
+        self._sync_selection_highlight()
 
     def _form_annotation(self) -> Annotation:
         kind = self._kind()
@@ -677,9 +751,13 @@ class MainWindow(QMainWindow):
         if row is None:
             return
         del self.annotations[row]
-        self._refresh_table(select=min(row, len(self.annotations) - 1))
+        new_row = min(row, len(self.annotations) - 1)
+        self._refresh_table(select=new_row)
+        if new_row >= 0:
+            self._fill_form(self.annotations[new_row])  # the highlight follows the form
 
     def _refresh_table(self, select: Optional[int] = None) -> None:
+        self._clear_marker()
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.annotations))
         for r, a in enumerate(self.annotations):
@@ -711,18 +789,10 @@ class MainWindow(QMainWindow):
         self._update_overlays()
 
     def _sync_view_selection(self) -> None:
-        row = self._selected_row()
-        if row is None or row >= len(self.annotations):
-            self.view.set_selected(None, None)
-        else:
-            self._select_in_view(row)
+        self._sync_selection_highlight()
 
-    def _select_in_view(self, row: int) -> None:
-        a = self.annotations[row]
-        if a.kind == ARROW:
-            self.view.set_selected(row, None, arrow=(a.x, a.y, a.x2, a.y2))
-        else:
-            self.view.set_selected(row, QRectF(a.x, a.y, a.w, a.h))
+    def _select_in_view(self, _row: int) -> None:
+        self._sync_selection_highlight()
 
     def _fill_form(self, a: Annotation) -> None:
         self.kind_combo.setCurrentIndex((TEXT, BLUR, ARROW).index(a.kind))
@@ -750,8 +820,10 @@ class MainWindow(QMainWindow):
     def _on_row_selected(self) -> None:
         row = self._selected_row()
         if row is None or row >= len(self.annotations):
+            self.view.set_selected(None, None)
             return
         a = self.annotations[row]
+        self._clear_marker()  # before the form fill, so the spin signals do not redraw it
         self._fill_form(a)
         if self.hide_action.isChecked():
             self.hide_action.setChecked(False)  # selecting a row brings the preview back
@@ -817,6 +889,7 @@ class MainWindow(QMainWindow):
             return
         loaded, skipped = exporter.load(path)
         self.annotations = loaded
+        self.table.clearSelection()
         self._refresh_table()
         if skipped:
             lines = "\n".join(f"line {n}: {err}" for n, _l, err in skipped[:10])

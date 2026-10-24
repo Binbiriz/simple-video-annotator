@@ -36,6 +36,10 @@ MIN_BOX_PX = 10  # smallest box when resizing on the canvas
 HANDLE_PX = 8  # handle size on screen
 HANDLE_HIT_PX = 6  # hit distance from a handle centre, on screen
 ARROW_HIT_PX = 8  # minimum hit distance from an arrow line, on screen
+SEL_FILL_ALPHA = 40  # selection fill while the annotation is active at the playhead
+SEL_DIM_FILL_ALPHA = 15  # selection fill while it is not
+SEL_DIM_PEN_ALPHA = 120
+SEL_DIM_HANDLE_OPACITY = 0.5
 
 HANDLES = ("tl", "t", "tr", "r", "br", "b", "bl", "l")
 ARROW_HANDLES = ("p1", "p2")  # start and end point of a selected arrow
@@ -57,10 +61,18 @@ def _cosmetic_pen(color: str, width: int = 2, dashed: bool = False) -> QPen:
     return pen
 
 
+def _dim_pen() -> QPen:
+    pen = _cosmetic_pen("#ffd400", 2, dashed=True)
+    color = pen.color()
+    color.setAlpha(SEL_DIM_PEN_ALPHA)
+    pen.setColor(color)
+    return pen
+
+
 def _highlight_item() -> QGraphicsRectItem:
     item = QGraphicsRectItem()
     item.setPen(_cosmetic_pen("#ffd400"))
-    item.setBrush(QBrush(QColor(255, 212, 0, 40)))
+    item.setBrush(QBrush(QColor(255, 212, 0, SEL_FILL_ALPHA)))
     item.setZValue(100)
     item.hide()
     return item
@@ -96,10 +108,14 @@ class VideoView(QGraphicsView):
     lineSelected = Signal(int, int, int, int)
     # index, x1, y1, x2, y2 in whole video pixels
     arrowEdited = Signal(int, int, int, int, int)
+    # draw mode: a new drag started, so the previous marker is stale
+    dragStarted = Signal()
 
     def __init__(self, parent=None):
         self._scene = QGraphicsScene()
         super().__init__(self._scene, parent)
+        # redraw the whole canvas on every change: no pixel trails from cosmetic pens/handles
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
         self.video_item = QGraphicsVideoItem()
         self._scene.addItem(self.video_item)
@@ -125,6 +141,11 @@ class VideoView(QGraphicsView):
         self._sel_index: Optional[int] = None
         self._sel_rect: Optional[QRectF] = None
         self._sel_arrow: Optional[Tuple[int, int, int, int]] = None  # x1, y1, x2, y2
+        self._sel_dim = False  # selected annotation is not active at the playhead
+        self._pen_solid = _cosmetic_pen("#ffd400")
+        self._pen_dim = _dim_pen()
+        self._brush_solid = QBrush(QColor(255, 212, 0, SEL_FILL_ALPHA))
+        self._brush_dim = QBrush(QColor(255, 212, 0, SEL_DIM_FILL_ALPHA))
         self._selection = _highlight_item()  # highlight of the selected annotation
         self._scene.addItem(self._selection)
         self._sel_line = _line_item()  # highlight of the selected arrow
@@ -205,6 +226,15 @@ class VideoView(QGraphicsView):
             self._edit = None
         self._rubber.hide()
         self._rubber_line.hide()
+        self._refresh_selection_items()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and (self._drag_start is not None
+                                                 or self._edit is not None):
+            self._cancel_drag()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _update_cursor(self, handle: Optional[str] = None) -> None:
         if handle is not None:
@@ -223,6 +253,7 @@ class VideoView(QGraphicsView):
                 self._select_press(pos)
             else:
                 self._drag_start = self._clamp(self.mapToScene(pos))
+                self.dragStarted.emit()
                 self._selection.hide()
                 self._sel_line.hide()
                 for h in self._handles.values():
@@ -262,27 +293,36 @@ class VideoView(QGraphicsView):
         rect = QRectF(self._drag_start, cur).normalized()
         start = self._drag_start
         self._drag_start = None
-        self._rubber_line.hide()
+        self.set_marker(None)  # the main window draws the final marker from the form
+        self._refresh_selection_items()
         if self._draw_line and (rect.width() >= CLICK_THRESHOLD_PX
                                 or rect.height() >= CLICK_THRESHOLD_PX):
             x1, y1, x2, y2 = round(start.x()), round(start.y()), round(cur.x()), round(cur.y())
-            self._rubber_line.setLine(QLineF(x1, y1, x2, y2))
-            self._rubber_line.show()
             self.lineSelected.emit(x1, y1, x2, y2)
             return
         if rect.width() < CLICK_THRESHOLD_PX and rect.height() < CLICK_THRESHOLD_PX:
-            x, y = round(start.x()), round(start.y())
-            self._show_rubber(QRectF(x - 6, y - 6, 12, 12))
-            self.regionSelected.emit(x, y, 0, 0)
+            self.regionSelected.emit(round(start.x()), round(start.y()), 0, 0)
         else:
-            x, y = round(rect.x()), round(rect.y())
-            w, h = round(rect.width()), round(rect.height())
-            self._show_rubber(QRectF(x, y, w, h))
-            self.regionSelected.emit(x, y, w, h)
+            self.regionSelected.emit(round(rect.x()), round(rect.y()),
+                                     round(rect.width()), round(rect.height()))
 
     def _show_rubber(self, rect: QRectF) -> None:
         self._rubber.setRect(rect)
         self._rubber.show()
+
+    def set_marker(self, shape: Optional[Tuple[str, Tuple[float, ...]]]) -> None:
+        """Show the yellow "new" marker: None hides it, ("rect", (x, y, w, h)) a rectangle,
+        ("line", (x1, y1, x2, y2)) a line."""
+        self._rubber.hide()
+        self._rubber_line.hide()
+        if shape is None:
+            return
+        kind, values = shape
+        if kind == "rect":
+            self._show_rubber(QRectF(*values))
+        elif kind == "line":
+            self._rubber_line.setLine(*values)
+            self._rubber_line.show()
 
     # ---- select mode ----------------------------------------------------------------
     def _selection_visible(self) -> bool:
@@ -440,8 +480,6 @@ class VideoView(QGraphicsView):
         """Highlight the annotation `index`: a box (`rect`) or an arrow (`arrow` = x1, y1, x2,
         y2); None clears the selection."""
         self._edit = None
-        self._rubber.hide()
-        self._rubber_line.hide()
         if index is None or (rect is None and arrow is None):
             self._sel_index, self._sel_rect, self._sel_arrow = None, None, None
         elif arrow is not None:
@@ -458,6 +496,11 @@ class VideoView(QGraphicsView):
             self._sel_line.setLine(x1, y1, x2, y2)
         elif visible:
             self._selection.setRect(self._sel_rect)
+        dim = self._sel_dim
+        pen = self._pen_dim if dim else self._pen_solid
+        self._selection.setPen(pen)
+        self._selection.setBrush(self._brush_dim if dim else self._brush_solid)
+        self._sel_line.setPen(pen)
         self._selection.setVisible(visible and not is_arrow)
         self._sel_line.setVisible(visible and is_arrow)
         show_handles = visible and self._select_mode
@@ -466,7 +509,14 @@ class VideoView(QGraphicsView):
             show = show_handles and name in active
             if show:
                 item.setPos(self._handle_scene_point(name))
+            item.setOpacity(SEL_DIM_HANDLE_OPACITY if dim else 1.0)
             item.setVisible(show)
+
+    def set_selection_dim(self, dim: bool) -> None:
+        """Draw the selection dimmed and dashed (the annotation is not active at the playhead)."""
+        if dim != self._sel_dim:
+            self._sel_dim = dim
+            self._refresh_selection_items()
 
     # ---- annotation preview ---------------------------------------------------------
     def set_overlays_visible(self, visible: bool) -> None:
