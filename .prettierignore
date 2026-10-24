@@ -1,0 +1,9 @@
+# Agent instruction files: their line breaks are part of the instructions
+# (e.g. $ARGUMENTS on its own line), so editors must never reformat them.
+CLAUDE.md
+AGENTS.md
+CONTINUE.md
+claude/
+continue/
+gemini/
+opencode/
