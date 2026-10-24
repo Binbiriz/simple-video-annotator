@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QProcess, Qt, QUrl
+from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import exporter
+from . import exporter, textfit
 from .models import BLUR, TEXT, Annotation
 from .video_view import VideoView
 
@@ -122,6 +122,8 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._connect()
         self._on_kind_changed()
+        if not textfit.resolve_font().preferred:
+            QTimer.singleShot(0, self._warn_font)
 
     # ---- UI construction ------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -186,7 +188,8 @@ class MainWindow(QMainWindow):
         for b in (self.add_btn, self.update_btn, self.delete_btn):
             btns.addWidget(b)
 
-        hint = QLabel("Click the video for a point, drag for a region.\n"
+        hint = QLabel("Click the video for a point, drag for a region\n"
+                      "(text and blur both need a dragged box).\n"
                       "Double-click a row to jump to its start.")
         hint.setStyleSheet("color: gray;")
 
@@ -374,8 +377,6 @@ class MainWindow(QMainWindow):
     # ---- annotation editing ---------------------------------------------------------
     def _on_kind_changed(self) -> None:
         is_blur = self.kind_combo.currentIndex() == 1
-        self.w_spin.setEnabled(is_blur)
-        self.h_spin.setEnabled(is_blur)
         self.text_edit.setEnabled(not is_blur)
 
     def _on_region(self, x: int, y: int, w: int, h: int) -> None:
@@ -393,8 +394,8 @@ class MainWindow(QMainWindow):
             end=self.end_spin.value(),
             x=self.x_spin.value(),
             y=self.y_spin.value(),
-            w=self.w_spin.value() if blur else 0,
-            h=self.h_spin.value() if blur else 0,
+            w=self.w_spin.value(),
+            h=self.h_spin.value(),
             text="" if blur else self.text_edit.text(),
         )
 
@@ -406,11 +407,13 @@ class MainWindow(QMainWindow):
         try:
             a = self._form_annotation()
             a.validate()
+            self._check_in_frame(a)
         except ValueError as exc:
             QMessageBox.warning(self, "Cannot add", str(exc))
             return
         self.annotations.append(a)
         self._refresh_table(select=len(self.annotations) - 1)
+        self._warn_if_unfit(a)
 
     def update_annotation(self) -> None:
         row = self._selected_row()
@@ -420,11 +423,34 @@ class MainWindow(QMainWindow):
         try:
             a = self._form_annotation()
             a.validate()
+            self._check_in_frame(a)
         except ValueError as exc:
             QMessageBox.warning(self, "Cannot update", str(exc))
             return
         self.annotations[row] = a
         self._refresh_table(select=row)
+        self._warn_if_unfit(a)
+
+    def _check_in_frame(self, a: Annotation) -> None:
+        vs = self.view.video_size()
+        if a.kind != TEXT or vs.isEmpty():
+            return
+        vw, vh = int(vs.width()), int(vs.height())
+        if a.x < 0 or a.y < 0 or a.x + a.w > vw or a.y + a.h > vh:
+            raise ValueError(f"The text box extends beyond the video frame ({vw}x{vh}).")
+
+    def _warn_if_unfit(self, a: Annotation) -> None:
+        if a.kind == TEXT and not textfit.fit_text(a.text, a.w, a.h).fits:
+            self.statusBar().showMessage(
+                f"Text does not fit in the box even at {textfit.MIN_SIZE} px; "
+                f"it will be rendered at {textfit.MIN_SIZE} px.", 8000)
+
+    def _warn_font(self) -> None:
+        QMessageBox.information(
+            self, "vidnote",
+            f"Ubuntu Mono is not installed. Using {textfit.resolve_font().family} instead; "
+            "text fitting may differ slightly.",
+        )
 
     def delete_annotation(self) -> None:
         row = self._selected_row()
@@ -492,7 +518,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Some lines were skipped",
                 f"{len(skipped)} line(s) could not be read (expected "
-                f"'text|start|end|x|y|text' or 'blur|start|end|x|y|w|h'):\n\n{lines}",
+                f"'text|start|end|x|y|w|h|text' or 'blur|start|end|x|y|w|h'):\n\n{lines}",
             )
 
     def render(self) -> None:
