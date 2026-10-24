@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import colors
+
 TEXT = "text"
 BLUR = "blur"
+
+DEFAULT_SIZE = 14  # font size, video px
+MIN_SIZE = 8
+MAX_SIZE = 72
+DEFAULT_BOX_COLOR = "#000000"
+DEFAULT_TEXT_COLOR = "#ffffff"
 
 
 @dataclass
@@ -18,6 +26,9 @@ class Annotation:
     w: int = 0  # box size, used by blur and text
     h: int = 0
     text: str = ""  # text only
+    size: int = DEFAULT_SIZE  # text only: font size in video px
+    box_color: str = DEFAULT_BOX_COLOR  # text only: '#rrggbb', drawn at 50% opacity
+    text_color: str = DEFAULT_TEXT_COLOR  # text only: black or white
 
     def is_active(self, t: float) -> bool:
         return self.start <= t <= self.end
@@ -35,3 +46,16 @@ class Annotation:
             raise ValueError("A text annotation needs a box: drag a rectangle on the video.")
         if self.kind == TEXT and not self.text.strip():
             raise ValueError("A text annotation needs some text.")
+        if self.kind == TEXT:
+            if not MIN_SIZE <= self.size <= MAX_SIZE:
+                raise ValueError(f"Font size must be between {MIN_SIZE} and {MAX_SIZE} px.")
+            try:
+                colors.normalize_hex(self.box_color)
+            except ValueError as exc:
+                raise ValueError(f"Box colour: {exc}") from None
+            try:
+                text_color = colors.normalize_hex(self.text_color)
+            except ValueError:
+                text_color = ""
+            if text_color not in colors.TEXT_COLORS:
+                raise ValueError("Text colour must be black or white.")
