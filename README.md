@@ -1,5 +1,7 @@
 # vidnote (v1: with rendering)
 
+[![Release](https://github.com/Binbiriz/simple-video-annotator/actions/workflows/release.yml/badge.svg)](https://github.com/Binbiriz/simple-video-annotator/actions/workflows/release.yml)
+
 A small Linux desktop tool for annotating videos. Open a video, **click or drag
 on it** to pick coordinates, set start/end times from the player, and add **text
 labels**, **blur regions** or **arrows**. vidnote saves a plain text annotation
