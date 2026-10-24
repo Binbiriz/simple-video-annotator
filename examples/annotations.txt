@@ -1,6 +1,6 @@
 # vidnote annotations
-# text|start|end|x|y|text
+# text|start|end|x|y|w|h|text
 # blur|start|end|x|y|w|h
-text|2|6|50|50|Welcome to the tutorial
+text|2|6|50|50|400|60|Welcome to the tutorial
 blur|3|8|100|200|300|120
-text|10|14|80|400|Click the Save button
+text|10|14|80|400|220|80|Click the Save button, then choose a folder to store the file

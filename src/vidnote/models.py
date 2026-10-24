@@ -15,8 +15,8 @@ class Annotation:
     end: float  # seconds
     x: int  # video pixels, origin at top-left
     y: int
-    w: int = 0  # blur only
-    h: int = 0  # blur only
+    w: int = 0  # box size, used by blur and text
+    h: int = 0
     text: str = ""  # text only
 
     def is_active(self, t: float) -> bool:
@@ -31,5 +31,7 @@ class Annotation:
             raise ValueError("End time must be after start time.")
         if self.kind == BLUR and (self.w <= 0 or self.h <= 0):
             raise ValueError("A blur needs a region: drag a rectangle on the video.")
+        if self.kind == TEXT and (self.w <= 0 or self.h <= 0):
+            raise ValueError("A text annotation needs a box: drag a rectangle on the video.")
         if self.kind == TEXT and not self.text.strip():
             raise ValueError("A text annotation needs some text.")

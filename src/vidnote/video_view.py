@@ -21,11 +21,10 @@ from PySide6.QtWidgets import (
     QGraphicsView,
 )
 
+from . import textfit
 from .models import BLUR, Annotation
 
-PREVIEW_FONT_PX = 48  # must match FONTSIZE in scripts/annotate.sh
 CLICK_THRESHOLD_PX = 4  # smaller drags count as a click
-BOX_BORDER = 12  # matches boxborderw in annotate.sh
 
 
 def _cosmetic_pen(color: str, width: int = 2, dashed: bool = False) -> QPen:
@@ -159,19 +158,31 @@ class VideoView(QGraphicsView):
                 self._scene.addItem(rect)
                 self._overlay_items.append(rect)
             else:
-                label = QGraphicsSimpleTextItem(a.text)
-                font = QFont()
-                font.setPixelSize(PREVIEW_FONT_PX)
-                label.setFont(font)
-                label.setBrush(QBrush(Qt.GlobalColor.white))
-                label.setPos(a.x, a.y)
-                label.setZValue(52)
-                bounds = label.boundingRect().translated(a.x, a.y)
-                bounds = bounds.adjusted(-BOX_BORDER, -BOX_BORDER, BOX_BORDER, BOX_BORDER)
-                bg = QGraphicsRectItem(bounds)
-                bg.setBrush(QBrush(QColor(0, 0, 0, 128)))
-                bg.setPen(QPen(Qt.PenStyle.NoPen))
-                bg.setZValue(51)
-                for item in (bg, label):
-                    self._scene.addItem(item)
-                    self._overlay_items.append(item)
+                self._add_text_overlay(a)
+
+    def _add_text_overlay(self, a: Annotation) -> None:
+        res = textfit.fit_text(a.text, a.w, a.h)
+        bg = QGraphicsRectItem(a.x, a.y, a.w, a.h)
+        bg.setBrush(QBrush(QColor(0, 0, 0, 128)))
+        bg.setPen(QPen(Qt.PenStyle.NoPen))
+        bg.setZValue(51)
+        items = [bg]
+        if not res.fits:
+            outline = QGraphicsRectItem(a.x, a.y, a.w, a.h)
+            outline.setPen(_cosmetic_pen("#ff4040", 2, dashed=True))
+            outline.setZValue(53)
+            items.append(outline)
+        font = QFont(textfit.resolve_font().family)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setPixelSize(res.size)
+        line_h = textfit.line_height(res.size)
+        for i, line in enumerate(res.lines):  # one item per line: same pitch as annotate.sh
+            label = QGraphicsSimpleTextItem(line)
+            label.setFont(font)
+            label.setBrush(QBrush(Qt.GlobalColor.white))
+            label.setPos(a.x + textfit.PAD, a.y + textfit.PAD + i * line_h)
+            label.setZValue(52)
+            items.append(label)
+        for item in items:
+            self._scene.addItem(item)
+            self._overlay_items.append(item)
