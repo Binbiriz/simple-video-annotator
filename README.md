@@ -36,18 +36,18 @@ Manual: `python3 -m venv .venv && source .venv/bin/activate && pip install -e . 
 
 ## Annotation file format
 
-Times in seconds, positions in video pixels from the top-left. `#` starts a comment. Old lines without the leading `text` keyword are still read.
+Times in seconds, positions in video pixels from the top-left. `#` starts a comment. Fields are separated by `|`; whitespace around fields is ignored. `x`, `y`, `w` and `h` are whole numbers. The text may contain spaces and `|`. The old whitespace-separated format is no longer supported: such lines are reported as malformed.
 
 ```
-text start end x y text...     # text
-blur start end x y w h         # blur
+text|start|end|x|y|text        # text
+blur|start|end|x|y|w|h         # blur
 ```
 
 Example:
 
 ```
-blur 52.24 54.68 170 220 448 176
-text 53.96 60.96 170 220 deneme
+blur|52.24|54.68|170|220|448|176
+text|53.96|60.96|170|220|deneme
 ```
 
 ## Rendering without the GUI
@@ -56,7 +56,7 @@ text 53.96 60.96 170 220 deneme
 ./scripts/annotate.sh input.mp4 annotations.txt output.mp4
 ```
 
-Text `x`/`y` may be ffmpeg expressions without spaces or commas, e.g. `(w-text_w)/2`.
+`x`/`y` are integer video pixels. A malformed line stops the script with a `file:line` message.
 Env vars: `FONT=/path/font.ttf`, `FONTSIZE=48`, `VIDNOTE_SCRIPT=/path/annotate.sh`.
 The output file is overwritten without asking.
 
