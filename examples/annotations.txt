@@ -1,0 +1,6 @@
+# vidnote annotations
+# text: text start end x y text
+# blur: blur start end x y w h
+text 2 6 50 50 Welcome to the tutorial
+blur 3 8 100 200 300 120
+text 10 14 80 400 Click the Save button

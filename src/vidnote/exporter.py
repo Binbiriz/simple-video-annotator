@@ -1,0 +1,87 @@
+"""Reading and writing the annotation text file used by scripts/annotate.sh.
+
+Format (one annotation per line, '#' starts a comment):
+
+    text start end x y text...       text annotation
+    blur start end x y w h           blur region
+
+For backward compatibility a text line may also omit the leading 'text' keyword.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from .models import BLUR, TEXT, Annotation
+
+HEADER = (
+    "# vidnote annotations\n"
+    "# text: text start end x y text\n"
+    "# blur: blur start end x y w h\n"
+)
+
+
+def fmt_time(t: float) -> str:
+    """3 decimals, trailing zeros removed: 2.5 -> '2.5', 3.0 -> '3', 0 -> '0'."""
+    return f"{t:.3f}".rstrip("0").rstrip(".") or "0"
+
+
+def to_line(a: Annotation) -> str:
+    if a.kind == BLUR:
+        return f"blur {fmt_time(a.start)} {fmt_time(a.end)} {a.x} {a.y} {a.w} {a.h}"
+    text = " ".join(a.text.split())  # single line, collapse whitespace
+    return f"text {fmt_time(a.start)} {fmt_time(a.end)} {a.x} {a.y} {text}"
+
+
+def parse_line(line: str) -> Optional[Annotation]:
+    """Return an Annotation, or None for blank/comment lines. Raises ValueError if malformed."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    parts = line.split()
+    try:
+        if parts[0] == "blur":
+            if len(parts) != 7:
+                raise ValueError("blur lines need: blur start end x y w h")
+            s, e = float(parts[1]), float(parts[2])
+            x, y, w, h = (int(p) for p in parts[3:7])
+            return Annotation(BLUR, s, e, x, y, w, h)
+        if parts[0] == "text":
+            parts = line.split(None, 5)[1:]  # drop the keyword
+        else:
+            parts = line.split(None, 4)  # legacy line without keyword
+        if len(parts) != 5:
+            raise ValueError("text lines need: text start end x y text")
+        return Annotation(TEXT, float(parts[0]), float(parts[1]), int(parts[2]), int(parts[3]),
+                          text=parts[4])
+    except (ValueError, IndexError) as exc:
+        raise ValueError(str(exc) or "invalid line") from exc
+
+
+def dumps(annotations: List[Annotation]) -> str:
+    ordered = sorted(annotations, key=lambda a: (a.start, a.end))
+    return HEADER + "".join(to_line(a) + "\n" for a in ordered)
+
+
+def save(annotations: List[Annotation], path) -> None:
+    Path(path).write_text(dumps(annotations), encoding="utf-8")
+
+
+def loads(content: str) -> Tuple[List[Annotation], List[Tuple[int, str, str]]]:
+    """Parse text. Returns (annotations, skipped) where skipped holds (lineno, line, error)."""
+    result: List[Annotation] = []
+    skipped: List[Tuple[int, str, str]] = []
+    for no, line in enumerate(content.splitlines(), start=1):
+        try:
+            a = parse_line(line)
+        except ValueError as exc:
+            skipped.append((no, line, str(exc)))
+            continue
+        if a is not None:
+            result.append(a)
+    return result, skipped
+
+
+def load(path) -> Tuple[List[Annotation], List[Tuple[int, str, str]]]:
+    return loads(Path(path).read_text(encoding="utf-8"))
