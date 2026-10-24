@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.binbiriz.vidnote</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <name>vidnote</name>
+  <summary>Annotate videos with text, blur and arrows</summary>
+  <description>
+    <p>
+      Pick coordinates on a video, add text labels, blur regions and arrows, and render the
+      result with ffmpeg.
+    </p>
+  </description>
+  <launchable type="desktop-id">vidnote.desktop</launchable>
+</component>
