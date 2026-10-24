@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QProcess, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QProcess, QRectF, QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,23 +31,33 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from . import exporter, textfit
-from .models import BLUR, TEXT, Annotation
+from . import colors, exporter, textfit
+from .colors_dialog import ColorListDialog
+from .models import BLUR, DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, TEXT, Annotation
 from .video_view import VideoView
 
 VIDEO_FILTER = "Video files (*.mp4 *.mkv *.webm *.mov *.avi *.m4v);;All files (*)"
 ANN_FILTER = "Annotation files (*.txt);;All files (*)"
-COLUMNS = ["Type", "Start", "End", "X", "Y", "W", "H", "Text"]
+COLUMNS = ["Type", "Start", "End", "X", "Y", "W", "H", "Size", "Box", "Color", "Text"]
+COLUMN_TIPS = {"Size": "Font size in px", "Box": "Text box colour", "Color": "Text colour"}
+SETTINGS_BOX_COLORS = "boxColors"
 
 
 def fmt_clock(ms: int) -> str:
     s = max(ms, 0) / 1000.0
     m = int(s // 60)
     return f"{m:02d}:{s - 60 * m:06.3f}"
+
+
+def swatch(color: str) -> QIcon:
+    pix = QPixmap(14, 14)
+    pix.fill(QColor(color))
+    return QIcon(pix)
 
 
 def find_script() -> Optional[Path]:
@@ -111,6 +122,7 @@ class MainWindow(QMainWindow):
         self.video_path: Optional[Path] = None
         self.fps = 30.0
         self._render_dialog: Optional[RenderDialog] = None
+        self.color_list, self._color_list_skipped = self._load_color_list()
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
@@ -122,6 +134,10 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._connect()
         self._on_kind_changed()
+        if self._color_list_skipped:
+            self.statusBar().showMessage(
+                f"{len(self._color_list_skipped)} invalid line(s) in the saved colour list were "
+                "skipped (Edit > Text box colours...)", 10000)
         if not textfit.resolve_font().preferred:
             QTimer.singleShot(0, self._warn_font)
 
@@ -162,6 +178,16 @@ class MainWindow(QMainWindow):
         self.w_spin, self.h_spin = self._px_spin(), self._px_spin()
         self.text_edit = QLineEdit()
         self.text_edit.setPlaceholderText("Text to show")
+        self.size_spin = QSpinBox()
+        self.size_spin.setRange(MIN_SIZE, MAX_SIZE)
+        self.size_spin.setValue(DEFAULT_SIZE)
+        self.size_spin.setSuffix(" px")
+        self.box_combo = QComboBox()
+        self._populate_box_combo()
+        self.text_color_combo = QComboBox()
+        self.text_color_combo.addItem(swatch("#000000"), "Black", "#000000")
+        self.text_color_combo.addItem(swatch("#ffffff"), "White", "#ffffff")
+        self.text_color_combo.setCurrentIndex(1)
 
         form = QFormLayout()
         form.addRow("Type", self.kind_combo)
@@ -180,6 +206,9 @@ class MainWindow(QMainWindow):
         wh.addWidget(self.h_spin)
         form.addRow("Size", wh)
         form.addRow("Text", self.text_edit)
+        form.addRow("Font size", self.size_spin)
+        form.addRow("Box colour", self.box_combo)
+        form.addRow("Text colour", self.text_color_combo)
 
         self.add_btn = QPushButton("Add")
         self.update_btn = QPushButton("Update selected")
@@ -188,8 +217,9 @@ class MainWindow(QMainWindow):
         for b in (self.add_btn, self.update_btn, self.delete_btn):
             btns.addWidget(b)
 
-        hint = QLabel("Click the video for a point, drag for a region\n"
+        hint = QLabel("Draw mode: click the video for a point, drag for a region\n"
                       "(text and blur both need a dragged box).\n"
+                      "Select mode: click an annotation, drag it or use the handles.\n"
                       "Double-click a row to jump to its start.")
         hint.setStyleSheet("color: gray;")
 
@@ -206,6 +236,8 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
+        for c, name in enumerate(COLUMNS):
+            self.table.horizontalHeaderItem(c).setToolTip(COLUMN_TIPS.get(name, name))
 
         right = QVBoxLayout()
         right.addWidget(group)
@@ -269,6 +301,9 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         act("Quit", "Ctrl+Q", self.close, m)
 
+        e = self.menuBar().addMenu("&Edit")
+        act("Text box colours...", "", self.edit_colors, e)
+
         p = self.menuBar().addMenu("&Playback")
         act("Play / pause", "Space", self.toggle_play, p)
         act("Previous frame", "Left", lambda: self.step(frames=-1), p)
@@ -279,6 +314,21 @@ class MainWindow(QMainWindow):
         act("Set start to current time", "[", lambda: self.start_spin.setValue(self.snapped_time()), p)
         act("Set end to current time", "]", lambda: self.end_spin.setValue(self.snapped_time()), p)
 
+        # no shortcuts: they would steal keys from the text field
+        tools = QToolBar("Tools", self)
+        tools.setMovable(False)
+        self.addToolBar(tools)
+        self.select_action = QAction("Select", self)
+        self.select_action.setCheckable(True)
+        self.select_action.setToolTip("Select mode: click, move and resize annotations")
+        self.select_action.toggled.connect(self.view.set_mode)
+        tools.addAction(self.select_action)
+        self.hide_action = QAction("Hide preview", self)
+        self.hide_action.setCheckable(True)
+        self.hide_action.setToolTip("Hide all preview items on the canvas")
+        self.hide_action.toggled.connect(self._on_hide_toggled)
+        tools.addAction(self.hide_action)
+
     def _connect(self) -> None:
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
@@ -287,7 +337,12 @@ class MainWindow(QMainWindow):
         self.player.errorOccurred.connect(self._on_player_error)
         self.slider.sliderMoved.connect(self.player.setPosition)
         self.view.regionSelected.connect(self._on_region)
+        self.view.annotationPicked.connect(self._on_annotation_picked)
+        self.view.geometryEdited.connect(self._on_geometry_edited)
         self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
+        self.size_spin.valueChanged.connect(self._update_overlays)
+        self.box_combo.currentIndexChanged.connect(self._update_overlays)
+        self.text_color_combo.currentIndexChanged.connect(self._update_overlays)
         self.add_btn.clicked.connect(self.add_annotation)
         self.update_btn.clicked.connect(self.update_annotation)
         self.delete_btn.clicked.connect(self.delete_annotation)
@@ -372,12 +427,77 @@ class MainWindow(QMainWindow):
 
     def _update_overlays(self) -> None:
         t = self.player.position() / 1000.0
-        self.view.set_overlays([a for a in self.annotations if a.is_active(t)])
+        selected = self._selected_row()
+        items = []
+        for i, a in enumerate(self.annotations):
+            if a.is_active(t):
+                if i == selected and a.kind == TEXT:
+                    a = self._with_form_style(a)  # live preview of unsaved style changes
+                items.append((i, a))
+        self.view.set_overlays(items)
+
+    def _with_form_style(self, a: Annotation) -> Annotation:
+        return replace(
+            a,
+            size=self.size_spin.value(),
+            box_color=self.box_combo.currentData() or a.box_color,
+            text_color=self.text_color_combo.currentData() or a.text_color,
+        )
 
     # ---- annotation editing ---------------------------------------------------------
+    def _on_hide_toggled(self, hidden: bool) -> None:
+        self.hide_action.setText("Show preview" if hidden else "Hide preview")
+        self.view.set_overlays_visible(not hidden)
+
     def _on_kind_changed(self) -> None:
         is_blur = self.kind_combo.currentIndex() == 1
         self.text_edit.setEnabled(not is_blur)
+        self.size_spin.setEnabled(not is_blur)
+        self.box_combo.setEnabled(not is_blur)
+        self.text_color_combo.setEnabled(not is_blur)
+
+    # ---- colour list ----------------------------------------------------------------
+    @staticmethod
+    def _settings() -> QSettings:
+        return QSettings("vidnote", "vidnote")
+
+    def _load_color_list(self):
+        text = self._settings().value(SETTINGS_BOX_COLORS, None)
+        if not isinstance(text, str) or not text.strip():
+            return list(colors.DEFAULT_COLOR_LIST), []
+        entries, skipped = colors.parse_color_list(text)
+        return (entries or list(colors.DEFAULT_COLOR_LIST)), skipped
+
+    def _save_color_list(self) -> None:
+        self._settings().setValue(SETTINGS_BOX_COLORS, colors.dump_color_list(self.color_list))
+
+    def edit_colors(self) -> None:
+        dialog = ColorListDialog(self.color_list, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.color_list = dialog.entries()
+        self._save_color_list()
+        self._set_box_color(self.box_combo.currentData())
+
+    def _populate_box_combo(self, extra: Optional[str] = None) -> None:
+        """Fill the box colour combo from the list; `extra` is a colour not in the list."""
+        self.box_combo.blockSignals(True)
+        self.box_combo.clear()
+        for hex_value, label in self.color_list:
+            self.box_combo.addItem(swatch(hex_value), label, hex_value)
+        if extra is not None:
+            self.box_combo.addItem(swatch(extra), f"{extra} (not in list)", extra)
+        self.box_combo.blockSignals(False)
+
+    def _set_box_color(self, value: Optional[str]) -> None:
+        try:
+            hex_value = colors.normalize_hex(value or "")
+        except ValueError:
+            hex_value = None
+        known = {h for h, _label in self.color_list}
+        self._populate_box_combo(extra=hex_value if hex_value not in known else None)
+        idx = self.box_combo.findData(hex_value) if hex_value else -1
+        self.box_combo.setCurrentIndex(max(idx, 0))
 
     def _on_region(self, x: int, y: int, w: int, h: int) -> None:
         self.x_spin.setValue(x)
@@ -397,6 +517,9 @@ class MainWindow(QMainWindow):
             w=self.w_spin.value(),
             h=self.h_spin.value(),
             text="" if blur else self.text_edit.text(),
+            size=self.size_spin.value(),
+            box_color=self.box_combo.currentData() or "#000000",
+            text_color=self.text_color_combo.currentData(),
         )
 
     def _selected_row(self) -> Optional[int]:
@@ -439,17 +562,22 @@ class MainWindow(QMainWindow):
         if a.x < 0 or a.y < 0 or a.x + a.w > vw or a.y + a.h > vh:
             raise ValueError(f"The text box extends beyond the video frame ({vw}x{vh}).")
 
-    def _warn_if_unfit(self, a: Annotation) -> None:
-        if a.kind == TEXT and not textfit.fit_text(a.text, a.w, a.h).fits:
-            self.statusBar().showMessage(
-                f"Text does not fit in the box even at {textfit.MIN_SIZE} px; "
-                f"it will be rendered at {textfit.MIN_SIZE} px.", 8000)
+    def _warn_if_unfit(self, a: Annotation, notes: Optional[List[str]] = None) -> None:
+        messages = list(notes or [])
+        if a.kind == TEXT:
+            if not textfit.layout_text(a.text, a.w, a.h, a.size).fits:
+                messages.append(f"Text is taller than the box at {a.size} px; "
+                                f"it will still be drawn at {a.size} px.")
+            if colors.normalize_hex(a.box_color) == colors.normalize_hex(a.text_color):
+                messages.append("Text colour equals the box colour; the text will be hard to read.")
+        if messages:
+            self.statusBar().showMessage(" ".join(messages), 8000)
 
     def _warn_font(self) -> None:
         QMessageBox.information(
             self, "vidnote",
             f"Ubuntu Mono is not installed. Using {textfit.resolve_font().family} instead; "
-            "text fitting may differ slightly.",
+            "text layout may differ slightly.",
         )
 
     def delete_annotation(self) -> None:
@@ -463,20 +591,33 @@ class MainWindow(QMainWindow):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.annotations))
         for r, a in enumerate(self.annotations):
+            is_text = a.kind == TEXT
             cells = [a.kind, exporter.fmt_time(a.start), exporter.fmt_time(a.end),
-                     a.x, a.y, a.w or "", a.h or "", a.text]
+                     a.x, a.y, a.w or "", a.h or "",
+                     a.size if is_text else "-",
+                     a.box_color if is_text else "-",
+                     a.text_color if is_text else "-",
+                     a.text]
             for c, value in enumerate(cells):
-                self.table.setItem(r, c, QTableWidgetItem(str(value)))
+                item = QTableWidgetItem(str(value))
+                if is_text and COLUMNS[c] in ("Box", "Color"):
+                    item.setIcon(swatch(str(value)))
+                self.table.setItem(r, c, item)
         if select is not None and 0 <= select < len(self.annotations):
             self.table.selectRow(select)
         self.table.blockSignals(False)
+        self._sync_view_selection()
         self._update_overlays()
 
-    def _on_row_selected(self) -> None:
+    def _sync_view_selection(self) -> None:
         row = self._selected_row()
         if row is None or row >= len(self.annotations):
-            return
-        a = self.annotations[row]
+            self.view.set_selected(None, None)
+        else:
+            a = self.annotations[row]
+            self.view.set_selected(row, QRectF(a.x, a.y, a.w, a.h))
+
+    def _fill_form(self, a: Annotation) -> None:
         self.kind_combo.setCurrentIndex(1 if a.kind == BLUR else 0)
         self.start_spin.setValue(a.start)
         self.end_spin.setValue(a.end)
@@ -485,7 +626,48 @@ class MainWindow(QMainWindow):
         self.w_spin.setValue(a.w)
         self.h_spin.setValue(a.h)
         self.text_edit.setText(a.text)
-        self.view.show_selection(a.x, a.y, a.w, a.h)
+        if a.kind == TEXT:
+            self.size_spin.setValue(a.size)
+            self._set_box_color(a.box_color)
+            idx = self.text_color_combo.findData(colors.normalize_hex(a.text_color))
+            self.text_color_combo.setCurrentIndex(max(idx, 0))
+
+    def _on_row_selected(self) -> None:
+        row = self._selected_row()
+        if row is None or row >= len(self.annotations):
+            return
+        a = self.annotations[row]
+        self._fill_form(a)
+        if self.hide_action.isChecked():
+            self.hide_action.setChecked(False)  # selecting a row brings the preview back
+        self.view.set_selected(row, QRectF(a.x, a.y, a.w, a.h))
+
+    def _on_annotation_picked(self, index: int) -> None:
+        if not 0 <= index < len(self.annotations):
+            return
+        if self._selected_row() == index:
+            self._on_row_selected()
+        else:
+            self.table.selectRow(index)
+        item = self.table.item(index, 0)
+        if item is not None:
+            self.table.scrollToItem(item)
+
+    def _on_geometry_edited(self, index: int, x: int, y: int, w: int, h: int) -> None:
+        if not 0 <= index < len(self.annotations):
+            return
+        a = self.annotations[index]
+        old_w, old_h = a.w, a.h
+        a.x, a.y, a.w, a.h = x, y, w, h
+        notes: List[str] = []
+        if a.kind == TEXT and (w, h) != (old_w, old_h) and old_w > 0 and old_h > 0:
+            wanted = round(a.size * min(w / old_w, h / old_h))
+            a.size = textfit.scaled_size(a.size, old_w, old_h, w, h)
+            if a.size != wanted:
+                notes.append(f"Font size limited to {a.size} px.")
+        self._refresh_table(select=index)
+        self._fill_form(a)
+        self._warn_if_unfit(a, notes)
 
     def _on_row_double_clicked(self, row: int, _col: int) -> None:
         if 0 <= row < len(self.annotations):
@@ -518,7 +700,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Some lines were skipped",
                 f"{len(skipped)} line(s) could not be read (expected "
-                f"'text|start|end|x|y|w|h|text' or 'blur|start|end|x|y|w|h'):\n\n{lines}",
+                f"'text|start|end|x|y|w|h|size|boxcolor|textcolor|text' or "
+                f"'blur|start|end|x|y|w|h'):\n\n{lines}",
             )
 
     def render(self) -> None:

@@ -1,7 +1,8 @@
-"""Fit text into a box: font size and line breaks. No Qt imports.
+"""Text layout in a box: line breaks at a given font size. No Qt imports.
 
-scripts/annotate.sh mirrors this algorithm (integer math, same constants); keep the two in
-sync. The model assumes a monospace font with a fixed glyph advance.
+There is no auto-fit: the text is drawn at exactly the requested size. scripts/annotate.sh
+mirrors the layout (integer math, same constants); keep the two in sync. The model assumes a
+monospace font with a fixed glyph advance.
 """
 
 from __future__ import annotations
@@ -11,8 +12,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import List
 
-MAX_SIZE = 14  # default and maximum font size, px
-MIN_SIZE = 8  # minimum font size, px
+from .models import MAX_SIZE, MIN_SIZE
+
 PAD = 4  # padding between the box edge and the text, px
 LINE_H_PM = 1150  # line height = size * LINE_H_PM / 1000
 # glyph advance = size * ADV_PM / 1000; a bit wide on purpose so any common monospace font
@@ -22,10 +23,10 @@ PREFERRED_FAMILY = "Ubuntu Mono"
 
 
 @dataclass
-class FitResult:
+class LayoutResult:
     size: int
     lines: List[str]
-    fits: bool
+    fits: bool  # False: taller than the box, or not even one glyph wide
 
 
 @dataclass
@@ -67,14 +68,21 @@ def _cols(avail_w: int, size: int, adv_pm: int) -> int:
     return max(1, max(avail_w, 0) * 1000 // (size * adv_pm))
 
 
-def fit_text(text: str, w: int, h: int, adv_pm: int = DEFAULT_ADV_PM) -> FitResult:
+def layout_text(
+    text: str, w: int, h: int, size: int, adv_pm: int = DEFAULT_ADV_PM
+) -> LayoutResult:
     avail_w = w - 2 * PAD
     avail_h = h - 2 * PAD
-    for size in range(MAX_SIZE, MIN_SIZE - 1, -1):
-        lines = wrap(text, _cols(avail_w, size, adv_pm))
-        if len(lines) * line_height(size) <= avail_h:
-            return FitResult(size, lines, True)
-    return FitResult(MIN_SIZE, wrap(text, _cols(avail_w, MIN_SIZE, adv_pm)), False)
+    lines = wrap(text, _cols(avail_w, size, adv_pm))
+    one_glyph = size * adv_pm // 1000
+    fits = len(lines) * line_height(size) <= avail_h and avail_w >= one_glyph
+    return LayoutResult(size, lines, fits)
+
+
+def scaled_size(size: int, old_w: int, old_h: int, new_w: int, new_h: int) -> int:
+    """Font size after resizing the box: scaled by the smaller side ratio, clamped to range."""
+    ratio = min(new_w / old_w, new_h / old_h)
+    return max(MIN_SIZE, min(MAX_SIZE, round(size * ratio)))
 
 
 def _fc_match(pattern: str) -> tuple:

@@ -3,7 +3,8 @@ import subprocess
 import pytest
 
 from vidnote import textfit
-from vidnote.textfit import MAX_SIZE, MIN_SIZE, PAD, fit_text, line_height, wrap
+from vidnote.models import MAX_SIZE, MIN_SIZE
+from vidnote.textfit import PAD, layout_text, line_height, scaled_size, wrap
 
 
 def test_wrap_short_text_is_one_line():
@@ -29,53 +30,56 @@ def test_wrap_collapses_spaces_and_handles_one_column():
     assert wrap("ab c", 1) == ["a", "b", "c"]
 
 
-def test_short_text_in_large_box_keeps_default_size():
-    res = fit_text("Hi", 600, 300)
-    assert res.size == MAX_SIZE and res.fits and res.lines == ["Hi"]
-
-
-def test_long_text_shrinks_and_wraps_inside_box():
+@pytest.mark.parametrize("size", [8, 14, 20, 40, 72])
+@pytest.mark.parametrize("w,h", [(30, 20), (150, 50), (400, 200)])
+def test_layout_uses_exactly_the_requested_size(size, w, h):
     text = "This is a rather long sentence that needs to be wrapped inside a small box"
-    res = fit_text(text, 200, 60)
-    assert MIN_SIZE <= res.size < MAX_SIZE
-    assert res.fits and len(res.lines) > 1
-    assert len(res.lines) * line_height(res.size) <= 60 - 2 * PAD
-    cols = (200 - 2 * PAD) * 1000 // (res.size * textfit.DEFAULT_ADV_PM)
+    res = layout_text(text, w, h, size)
+    assert res.size == size  # no auto-shrink, even when the text overflows
+    cols = max(1, (w - 2 * PAD) * 1000 // (size * textfit.DEFAULT_ADV_PM))
     assert all(len(ln) <= cols for ln in res.lines)
+    if res.fits:
+        assert len(res.lines) * line_height(size) <= h - 2 * PAD
 
 
-def test_unfittable_text_uses_minimum_size_and_reports_it():
-    res = fit_text("word " * 100, 60, 30)
-    assert res.size == MIN_SIZE and not res.fits
+def test_short_text_in_large_box_fits():
+    res = layout_text("Hi", 600, 300, 14)
+    assert res.size == 14 and res.fits and res.lines == ["Hi"]
 
 
-def test_single_long_word_is_broken():
-    res = fit_text("Supercalifragilisticexpialidocious", 60, 200)
+def test_larger_size_wraps_into_more_lines():
+    text = "word " * 20
+    assert len(layout_text(text, 300, 400, 30).lines) > len(layout_text(text, 300, 400, 10).lines)
+
+
+def test_fits_is_false_when_lines_are_too_tall():
+    res = layout_text("word " * 100, 60, 30, 14)
+    assert res.size == 14 and not res.fits
+
+
+def test_fits_is_false_when_box_is_narrower_than_one_glyph():
+    res = layout_text("hi", 12, 200, 40)
+    assert not res.fits and res.lines
+
+
+def test_single_long_word_is_hard_broken_at_given_size():
+    res = layout_text("Supercalifragilisticexpialidocious", 60, 400, 14)
     assert res.fits and len(res.lines) > 1
     assert "".join(res.lines) == "Supercalifragilisticexpialidocious"
 
 
 def test_tiny_box_does_not_crash():
-    res = fit_text("hello", 2, 2)
-    assert res.size == MIN_SIZE and not res.fits and res.lines
+    res = layout_text("hello", 2, 2, 72)
+    assert res.size == 72 and not res.fits and res.lines
 
 
-@pytest.mark.parametrize("w", [30, 80, 150, 400])
-@pytest.mark.parametrize("h", [20, 50, 120])
-@pytest.mark.parametrize("text", ["x", "hello world", "çok güzel bir şarkı ışığı " * 4])
-def test_fit_invariants(text, w, h):
-    res = fit_text(text, w, h)
-    cols = max(1, (w - 2 * PAD) * 1000 // (res.size * textfit.DEFAULT_ADV_PM))
-    assert all(len(ln) <= cols for ln in res.lines)
-    if res.fits:
-        assert len(res.lines) * line_height(res.size) <= h - 2 * PAD
-    else:
-        assert res.size == MIN_SIZE
-
-
-def test_wider_advance_never_gives_larger_size():
-    text = "some text that is long enough to need shrinking in a small box"
-    assert fit_text(text, 150, 40, 700).size <= fit_text(text, 150, 40, 500).size
+def test_scaled_size():
+    assert scaled_size(14, 100, 50, 100, 50) == 14
+    assert scaled_size(14, 100, 50, 200, 100) == 28
+    assert scaled_size(20, 100, 50, 200, 50) == 20  # smaller ratio wins
+    assert scaled_size(20, 100, 50, 100, 25) == 10
+    assert scaled_size(10, 100, 50, 10, 5) == MIN_SIZE
+    assert scaled_size(60, 100, 50, 500, 250) == MAX_SIZE
 
 
 def _fake_fc_match(monkeypatch, answers):
