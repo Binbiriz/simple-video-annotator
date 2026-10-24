@@ -1,11 +1,11 @@
 # vidnote (v1: with rendering)
 
 A small Linux desktop tool for annotating videos. Open a video, **click or drag on it** to pick
-coordinates, set start/end times from the player, and add **text labels** or **blur regions**.
+coordinates, set start/end times from the player, and add **text labels**, **blur regions** or **arrows**.
 vidnote saves a plain text annotation file and can render the result with **ffmpeg**.
 
 ```
-video -> click / drag to pick x, y, w, h -> annotations.txt -> annotate.sh (ffmpeg) -> output.mp4
+video -> click / drag to pick x, y, w, h (or an arrow's end points) -> annotations.txt -> annotate.sh (ffmpeg) -> output.mp4
 ```
 
 Built with Python and PySide6 (Qt 6).
@@ -36,31 +36,44 @@ Manual: `python3 -m venv .venv && source .venv/bin/activate && pip install -e . 
    white). Resize via the W/H fields if needed. The canvas preview shows the text at that size;
    boxes whose text does not fit get a red dashed outline. With a row selected, changing the size or colours updates its preview
    immediately; press **Update selected** to keep the change.
-4. **Add**. Select a row to **Update selected** or **Delete selected**.
-5. Toolbar **Select** switches to select mode: click an annotation that is active at the current
+4. Arrows: set **Type** to **Arrow** and drag on the video from the start point to the end point
+   (the start stays where the drag began, also for right-to-left or bottom-to-top drags). Choose
+   the **Thickness** (1-30 px, default 4), the **Colour** (from the same list as the box colours)
+   and a style for each end (**None** or **Arrowhead**; default none at the start, arrowhead at
+   the end). Arrowheads scale with the thickness. Arrows are always drawn at 50% opacity, as one
+   shape, and both end points must lie inside the video. Changing thickness, colour or styles with
+   a row selected updates the canvas immediately.
+5. **Add**. Select a row to **Update selected** or **Delete selected**.
+6. Toolbar **Select** switches to select mode: click an annotation that is active at the current
    time (click again at the same spot to cycle through overlapping ones), drag it to move it, or
    drag a handle to resize it. Text and blur both work; the box stays inside the video and is at
    least 10x10 px. Resizing a text box scales its font size (you can still change it in the form).
+   A selected arrow shows a handle on each end point: drag a handle to move that end, or drag the
+   line to move the whole arrow (both end points stay inside the video). A thin arrow can still be
+   clicked: the click area is at least 8 screen pixels wide.
    Annotations that are not active at the current time can be selected from the list and then
    edited on the canvas too. Switch **Select** off to draw new regions again.
-6. Toolbar **Hide preview** (it then reads **Show preview**) hides every preview item on the canvas (boxes, text, highlight,
+7. Toolbar **Hide preview** (it then reads **Show preview**) hides every preview item on the canvas (boxes, text, arrows, highlight,
    handles) without touching the annotations; toggle it off or select a list row to bring them
    back.
-7. **Edit > Text box colours...** edits the colour list, one `hex|label` per line (for example
+8. **Edit > Box and arrow colours...** edits the colour list, one `hex|label` per line (for example
    `#ffd400|Yellow`). It is stored in the app settings and applies to all files; invalid or
    duplicate lines are reported and skipped.
-8. `Ctrl+S` saves the annotation file, `Ctrl+R` renders the video through ffmpeg.
+9. `Ctrl+S` saves the annotation file, `Ctrl+R` renders the video through ffmpeg.
 
 ## Annotation file format
 
-Times in seconds, positions in video pixels from the top-left. `#` starts a comment. Fields are separated by `|`; whitespace around fields is ignored. `x`, `y`, `w`, `h` and `size` are whole numbers. The text is the rest of the line and may contain spaces and `|`. Old formats (whitespace-separated lines, `text|start|end|x|y|text`, and `text|start|end|x|y|w|h|text` without `size` and colours) are no longer supported: such lines are reported as malformed.
+Times in seconds, positions in video pixels from the top-left. `#` starts a comment. Fields are separated by `|`; whitespace around fields is ignored. `x`, `y`, `w`, `h`, `size`, the arrow points and `thickness` are whole numbers. The text is the rest of the line and may contain spaces and `|`. Old formats (whitespace-separated lines, `text|start|end|x|y|text`, and `text|start|end|x|y|w|h|text` without `size` and colours) are no longer supported: such lines are reported as malformed.
 
 ```
 text|start|end|x|y|w|h|size|boxcolor|textcolor|text    # text in a w x h box
 blur|start|end|x|y|w|h                                 # blur
+arrow|start|end|x1|y1|x2|y2|thickness|color|startstyle|endstyle   # arrow from (x1,y1) to (x2,y2)
 ```
 
 `size` is the font size in video pixels (8-72). `boxcolor` is `#rrggbb` (written lowercase; read with or without `#`, any case) and is drawn at 50% opacity. `textcolor` is `#000000` or `#ffffff` only.
+
+For an arrow, `thickness` is 1-30 px, `color` is `#rrggbb` (same rules as `boxcolor`, drawn at 50% opacity) and `startstyle`/`endstyle` are `none` or `arrow` (an arrowhead), lowercase. Both points must differ and lie inside the video. Annotations are drawn in file order, so later lines are on top.
 
 Example:
 
@@ -68,6 +81,8 @@ Example:
 blur|52.24|54.68|170|220|448|176
 text|53.96|60.96|170|220|300|60|14|#000000|#ffffff|deneme
 text|60|64|20|20|300|80|24|#ffd400|#000000|Black text on a yellow box
+arrow|55|58|400|300|240|240|4|#e03131|none|arrow
+arrow|60|64|500|60|300|60|8|#ffffff|arrow|arrow
 ```
 
 The text is drawn left aligned in a monospace font (Ubuntu Mono preferred) inside the box. It is
@@ -82,19 +97,24 @@ The box must lie inside the video.
 ./scripts/annotate.sh input.mp4 annotations.txt output.mp4
 ```
 
-`x`/`y`/`w`/`h` are integer video pixels. A malformed line, or a text box outside the video, stops
+`x`/`y`/`w`/`h` and the arrow points are integer video pixels. A malformed line, a text box outside the video, or an arrow end point outside the video stops
 the script with a `file:line` message. Text that does not fit its box at its font size prints a warning.
 Env vars: `FONT=/path/font.ttf`, `VIDNOTE_SCRIPT=/path/annotate.sh`.
 The output file is overwritten without asking.
+
+Blur, text and arrows are drawn in file order. Each arrow is drawn as a transparent PNG that
+ffmpeg itself generates (the `geq` filter computes an anti-aliased alpha mask, mirroring
+`src/vidnote/arrowgeom.py`) and lays over the video during the arrow's time range, so no
+additional tool is needed.
 
 ## Project layout
 
 ```
 src/vidnote/  __main__.py, main_window.py, video_view.py, colors_dialog.py,
-              models.py, exporter.py, colors.py, textfit.py
+              models.py, exporter.py, colors.py, textfit.py, arrowgeom.py
 scripts/annotate.sh
 tests/        test_models.py, test_exporter.py, test_colors.py, test_textfit.py,
-              test_annotate_sh.py
+              test_arrowgeom.py, test_annotate_sh.py
 examples/annotations.txt
 ```
 
@@ -109,7 +129,7 @@ ruff check src tests
 
 `VideoView` is a `QGraphicsView` whose scene is the video's native pixel space, so
 `mapToScene()` on a click returns exact video pixels regardless of scaling or letterboxing.
-`models.py`, `exporter.py` and `colors.py` have no Qt imports and are testable without a display.
+`models.py`, `exporter.py`, `colors.py`, `textfit.py` and `arrowgeom.py` have no Qt imports and are testable without a display.
 
 ## Troubleshooting
 

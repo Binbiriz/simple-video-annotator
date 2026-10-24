@@ -1,6 +1,9 @@
 # vidnote annotations
 # text|start|end|x|y|w|h|size|boxcolor|textcolor|text
 # blur|start|end|x|y|w|h
+# arrow|start|end|x1|y1|x2|y2|thickness|color|startstyle|endstyle
 text|2|6|50|50|400|60|20|#000000|#ffffff|Welcome to the tutorial
 blur|3|8|100|200|300|120
 text|10|14|80|400|300|80|16|#ffd400|#000000|Click the Save button, then choose a folder to store the file
+arrow|3|8|450|300|330|230|4|#e03131|none|arrow
+arrow|10|14|500|60|300|60|8|#ffffff|arrow|arrow

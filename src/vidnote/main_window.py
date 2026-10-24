@@ -38,13 +38,29 @@ from PySide6.QtWidgets import (
 
 from . import colors, exporter, textfit
 from .colors_dialog import ColorListDialog
-from .models import BLUR, DEFAULT_SIZE, MAX_SIZE, MIN_SIZE, TEXT, Annotation
+from .models import (
+    ARROW,
+    ARROW_STYLES,
+    BLUR,
+    DEFAULT_ARROW_COLOR,
+    DEFAULT_END_STYLE,
+    DEFAULT_SIZE,
+    DEFAULT_START_STYLE,
+    DEFAULT_THICKNESS,
+    MAX_SIZE,
+    MAX_THICKNESS,
+    MIN_SIZE,
+    MIN_THICKNESS,
+    TEXT,
+    Annotation,
+)
 from .video_view import VideoView
 
 VIDEO_FILTER = "Video files (*.mp4 *.mkv *.webm *.mov *.avi *.m4v);;All files (*)"
 ANN_FILTER = "Annotation files (*.txt);;All files (*)"
 COLUMNS = ["Type", "Start", "End", "X", "Y", "W", "H", "Size", "Box", "Color", "Text"]
-COLUMN_TIPS = {"Size": "Font size in px", "Box": "Text box colour", "Color": "Text colour"}
+COLUMN_TIPS = {"Size": "Font size in px", "Box": "Text box / arrow colour", "Color": "Text colour"}
+STYLE_LABELS = {"none": "None", "arrow": "Arrowhead"}
 SETTINGS_BOX_COLORS = "boxColors"
 
 
@@ -137,7 +153,7 @@ class MainWindow(QMainWindow):
         if self._color_list_skipped:
             self.statusBar().showMessage(
                 f"{len(self._color_list_skipped)} invalid line(s) in the saved colour list were "
-                "skipped (Edit > Text box colours...)", 10000)
+                "skipped (Edit > Box and arrow colours...)", 10000)
         if not textfit.resolve_font().preferred:
             QTimer.singleShot(0, self._warn_font)
 
@@ -171,11 +187,18 @@ class MainWindow(QMainWindow):
 
         # --- annotation form
         self.kind_combo = QComboBox()
-        self.kind_combo.addItems(["Text", "Blur"])
+        self.kind_combo.addItems(["Text", "Blur", "Arrow"])
         self.start_spin = self._time_spin()
         self.end_spin = self._time_spin()
         self.x_spin, self.y_spin = self._px_spin(), self._px_spin()
         self.w_spin, self.h_spin = self._px_spin(), self._px_spin()
+        self.x2_spin, self.y2_spin = self._px_spin(), self._px_spin()
+        self.thickness_spin = QSpinBox()
+        self.thickness_spin.setRange(MIN_THICKNESS, MAX_THICKNESS)
+        self.thickness_spin.setValue(DEFAULT_THICKNESS)
+        self.thickness_spin.setSuffix(" px")
+        self.start_style_combo = self._style_combo(DEFAULT_START_STYLE)
+        self.end_style_combo = self._style_combo(DEFAULT_END_STYLE)
         self.text_edit = QLineEdit()
         self.text_edit.setPlaceholderText("Text to show")
         self.size_spin = QSpinBox()
@@ -205,10 +228,21 @@ class MainWindow(QMainWindow):
         wh.addWidget(QLabel("H"))
         wh.addWidget(self.h_spin)
         form.addRow("Size", wh)
+        x2y2 = QHBoxLayout()
+        x2y2.addWidget(QLabel("X"))
+        x2y2.addWidget(self.x2_spin)
+        x2y2.addWidget(QLabel("Y"))
+        x2y2.addWidget(self.y2_spin)
+        self.end_point_label = QLabel("End point")
+        form.addRow(self.end_point_label, x2y2)
         form.addRow("Text", self.text_edit)
         form.addRow("Font size", self.size_spin)
-        form.addRow("Box colour", self.box_combo)
+        self.box_label = QLabel("Box colour")
+        form.addRow(self.box_label, self.box_combo)
         form.addRow("Text colour", self.text_color_combo)
+        form.addRow("Thickness", self.thickness_spin)
+        form.addRow("Start style", self.start_style_combo)
+        form.addRow("End style", self.end_style_combo)
 
         self.add_btn = QPushButton("Add")
         self.update_btn = QPushButton("Update selected")
@@ -219,6 +253,7 @@ class MainWindow(QMainWindow):
 
         hint = QLabel("Draw mode: click the video for a point, drag for a region\n"
                       "(text and blur both need a dragged box).\n"
+                      "Arrow type: drag from the start point to the end point.\n"
                       "Select mode: click an annotation, drag it or use the handles.\n"
                       "Double-click a row to jump to its start.")
         hint.setStyleSheet("color: gray;")
@@ -264,6 +299,14 @@ class MainWindow(QMainWindow):
         return s
 
     @staticmethod
+    def _style_combo(default: str) -> QComboBox:
+        combo = QComboBox()
+        for style in ARROW_STYLES:
+            combo.addItem(STYLE_LABELS[style], style)
+        combo.setCurrentIndex(max(combo.findData(default), 0))
+        return combo
+
+    @staticmethod
     def _px_spin() -> QSpinBox:
         s = QSpinBox()
         s.setRange(0, 20000)
@@ -302,7 +345,7 @@ class MainWindow(QMainWindow):
         act("Quit", "Ctrl+Q", self.close, m)
 
         e = self.menuBar().addMenu("&Edit")
-        act("Text box colours...", "", self.edit_colors, e)
+        act("Box and arrow colours...", "", self.edit_colors, e)
 
         p = self.menuBar().addMenu("&Playback")
         act("Play / pause", "Space", self.toggle_play, p)
@@ -339,10 +382,15 @@ class MainWindow(QMainWindow):
         self.view.regionSelected.connect(self._on_region)
         self.view.annotationPicked.connect(self._on_annotation_picked)
         self.view.geometryEdited.connect(self._on_geometry_edited)
+        self.view.lineSelected.connect(self._on_line)
+        self.view.arrowEdited.connect(self._on_arrow_edited)
         self.kind_combo.currentIndexChanged.connect(self._on_kind_changed)
         self.size_spin.valueChanged.connect(self._update_overlays)
         self.box_combo.currentIndexChanged.connect(self._update_overlays)
         self.text_color_combo.currentIndexChanged.connect(self._update_overlays)
+        self.thickness_spin.valueChanged.connect(self._update_overlays)
+        self.start_style_combo.currentIndexChanged.connect(self._update_overlays)
+        self.end_style_combo.currentIndexChanged.connect(self._update_overlays)
         self.add_btn.clicked.connect(self.add_annotation)
         self.update_btn.clicked.connect(self.update_annotation)
         self.delete_btn.clicked.connect(self.delete_annotation)
@@ -431,12 +479,20 @@ class MainWindow(QMainWindow):
         items = []
         for i, a in enumerate(self.annotations):
             if a.is_active(t):
-                if i == selected and a.kind == TEXT:
+                if i == selected and a.kind in (TEXT, ARROW):
                     a = self._with_form_style(a)  # live preview of unsaved style changes
                 items.append((i, a))
         self.view.set_overlays(items)
 
     def _with_form_style(self, a: Annotation) -> Annotation:
+        if a.kind == ARROW:
+            return replace(
+                a,
+                thickness=self.thickness_spin.value(),
+                color=self.box_combo.currentData() or a.color,
+                start_style=self.start_style_combo.currentData() or a.start_style,
+                end_style=self.end_style_combo.currentData() or a.end_style,
+            )
         return replace(
             a,
             size=self.size_spin.value(),
@@ -449,12 +505,23 @@ class MainWindow(QMainWindow):
         self.hide_action.setText("Show preview" if hidden else "Hide preview")
         self.view.set_overlays_visible(not hidden)
 
+    def _kind(self) -> str:
+        return (TEXT, BLUR, ARROW)[self.kind_combo.currentIndex()]
+
     def _on_kind_changed(self) -> None:
-        is_blur = self.kind_combo.currentIndex() == 1
-        self.text_edit.setEnabled(not is_blur)
-        self.size_spin.setEnabled(not is_blur)
-        self.box_combo.setEnabled(not is_blur)
-        self.text_color_combo.setEnabled(not is_blur)
+        kind = self._kind()
+        is_text, is_arrow = kind == TEXT, kind == ARROW
+        self.text_edit.setEnabled(is_text)
+        self.size_spin.setEnabled(is_text)
+        self.text_color_combo.setEnabled(is_text)
+        self.box_combo.setEnabled(is_text or is_arrow)
+        self.box_label.setText("Colour" if is_arrow else "Box colour")
+        self.w_spin.setEnabled(not is_arrow)
+        self.h_spin.setEnabled(not is_arrow)
+        for widget in (self.x2_spin, self.y2_spin, self.thickness_spin,
+                       self.start_style_combo, self.end_style_combo):
+            widget.setEnabled(is_arrow)
+        self.view.set_draw_line(is_arrow)
 
     # ---- colour list ----------------------------------------------------------------
     @staticmethod
@@ -502,14 +569,35 @@ class MainWindow(QMainWindow):
     def _on_region(self, x: int, y: int, w: int, h: int) -> None:
         self.x_spin.setValue(x)
         self.y_spin.setValue(y)
-        if w > 0 and h > 0:
+        if w > 0 and h > 0 and self._kind() != ARROW:
             self.w_spin.setValue(w)
             self.h_spin.setValue(h)
 
+    def _on_line(self, x1: int, y1: int, x2: int, y2: int) -> None:
+        self.x_spin.setValue(x1)
+        self.y_spin.setValue(y1)
+        self.x2_spin.setValue(x2)
+        self.y2_spin.setValue(y2)
+
     def _form_annotation(self) -> Annotation:
-        blur = self.kind_combo.currentIndex() == 1
+        kind = self._kind()
+        if kind == ARROW:
+            return Annotation(
+                kind=ARROW,
+                start=self.start_spin.value(),
+                end=self.end_spin.value(),
+                x=self.x_spin.value(),
+                y=self.y_spin.value(),
+                x2=self.x2_spin.value(),
+                y2=self.y2_spin.value(),
+                thickness=self.thickness_spin.value(),
+                color=self.box_combo.currentData() or DEFAULT_ARROW_COLOR,
+                start_style=self.start_style_combo.currentData(),
+                end_style=self.end_style_combo.currentData(),
+            )
+        blur = kind == BLUR
         return Annotation(
-            kind=BLUR if blur else TEXT,
+            kind=kind,
             start=self.start_spin.value(),
             end=self.end_spin.value(),
             x=self.x_spin.value(),
@@ -556,9 +644,13 @@ class MainWindow(QMainWindow):
 
     def _check_in_frame(self, a: Annotation) -> None:
         vs = self.view.video_size()
-        if a.kind != TEXT or vs.isEmpty():
+        if a.kind not in (TEXT, ARROW) or vs.isEmpty():
             return
         vw, vh = int(vs.width()), int(vs.height())
+        if a.kind == ARROW:
+            if not (0 <= a.x <= vw and 0 <= a.y <= vh and 0 <= a.x2 <= vw and 0 <= a.y2 <= vh):
+                raise ValueError(f"The arrow extends beyond the video frame ({vw}x{vh}).")
+            return
         if a.x < 0 or a.y < 0 or a.x + a.w > vw or a.y + a.h > vh:
             raise ValueError(f"The text box extends beyond the video frame ({vw}x{vh}).")
 
@@ -591,16 +683,25 @@ class MainWindow(QMainWindow):
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.annotations))
         for r, a in enumerate(self.annotations):
-            is_text = a.kind == TEXT
+            is_text, is_arrow = a.kind == TEXT, a.kind == ARROW
+            if is_arrow:
+                box = a.color
+                text = (f"to ({a.x2},{a.y2}), {a.thickness} px, "
+                        f"{a.start_style}>{a.end_style}")
+            else:
+                box = a.box_color if is_text else "-"
+                text = a.text
             cells = [a.kind, exporter.fmt_time(a.start), exporter.fmt_time(a.end),
                      a.x, a.y, a.w or "", a.h or "",
                      a.size if is_text else "-",
-                     a.box_color if is_text else "-",
+                     box,
                      a.text_color if is_text else "-",
-                     a.text]
+                     text]
             for c, value in enumerate(cells):
                 item = QTableWidgetItem(str(value))
-                if is_text and COLUMNS[c] in ("Box", "Color"):
+                if COLUMNS[c] == "Box" and (is_text or is_arrow):
+                    item.setIcon(swatch(str(value)))
+                elif COLUMNS[c] == "Color" and is_text:
                     item.setIcon(swatch(str(value)))
                 self.table.setItem(r, c, item)
         if select is not None and 0 <= select < len(self.annotations):
@@ -614,11 +715,17 @@ class MainWindow(QMainWindow):
         if row is None or row >= len(self.annotations):
             self.view.set_selected(None, None)
         else:
-            a = self.annotations[row]
+            self._select_in_view(row)
+
+    def _select_in_view(self, row: int) -> None:
+        a = self.annotations[row]
+        if a.kind == ARROW:
+            self.view.set_selected(row, None, arrow=(a.x, a.y, a.x2, a.y2))
+        else:
             self.view.set_selected(row, QRectF(a.x, a.y, a.w, a.h))
 
     def _fill_form(self, a: Annotation) -> None:
-        self.kind_combo.setCurrentIndex(1 if a.kind == BLUR else 0)
+        self.kind_combo.setCurrentIndex((TEXT, BLUR, ARROW).index(a.kind))
         self.start_spin.setValue(a.start)
         self.end_spin.setValue(a.end)
         self.x_spin.setValue(a.x)
@@ -626,6 +733,14 @@ class MainWindow(QMainWindow):
         self.w_spin.setValue(a.w)
         self.h_spin.setValue(a.h)
         self.text_edit.setText(a.text)
+        if a.kind == ARROW:
+            self.x2_spin.setValue(a.x2)
+            self.y2_spin.setValue(a.y2)
+            self.thickness_spin.setValue(a.thickness)
+            self._set_box_color(a.color)
+            for combo, style in ((self.start_style_combo, a.start_style),
+                                 (self.end_style_combo, a.end_style)):
+                combo.setCurrentIndex(max(combo.findData(style), 0))
         if a.kind == TEXT:
             self.size_spin.setValue(a.size)
             self._set_box_color(a.box_color)
@@ -640,7 +755,7 @@ class MainWindow(QMainWindow):
         self._fill_form(a)
         if self.hide_action.isChecked():
             self.hide_action.setChecked(False)  # selecting a row brings the preview back
-        self.view.set_selected(row, QRectF(a.x, a.y, a.w, a.h))
+        self._select_in_view(row)
 
     def _on_annotation_picked(self, index: int) -> None:
         if not 0 <= index < len(self.annotations):
@@ -668,6 +783,14 @@ class MainWindow(QMainWindow):
         self._refresh_table(select=index)
         self._fill_form(a)
         self._warn_if_unfit(a, notes)
+
+    def _on_arrow_edited(self, index: int, x1: int, y1: int, x2: int, y2: int) -> None:
+        if not 0 <= index < len(self.annotations):
+            return
+        a = self.annotations[index]
+        a.x, a.y, a.x2, a.y2 = x1, y1, x2, y2
+        self._refresh_table(select=index)
+        self._fill_form(a)
 
     def _on_row_double_clicked(self, row: int, _col: int) -> None:
         if 0 <= row < len(self.annotations):
@@ -700,8 +823,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Some lines were skipped",
                 f"{len(skipped)} line(s) could not be read (expected "
-                f"'text|start|end|x|y|w|h|size|boxcolor|textcolor|text' or "
-                f"'blur|start|end|x|y|w|h'):\n\n{lines}",
+                f"'text|start|end|x|y|w|h|size|boxcolor|textcolor|text', "
+                f"'blur|start|end|x|y|w|h' or "
+                f"'arrow|start|end|x1|y1|x2|y2|thickness|color|startstyle|endstyle'):"
+                f"\n\n{lines}",
             )
 
     def render(self) -> None:

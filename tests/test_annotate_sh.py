@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from vidnote import colors, textfit
+from vidnote import arrowgeom, colors, textfit
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "annotate.sh"
@@ -15,11 +15,15 @@ SCRIPT = ROOT / "scripts" / "annotate.sh"
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
-def _render(tmp_path, content):
+TESTSRC = "testsrc=duration=3:size=640x360:rate=25"
+BLACK = "color=c=black:duration=3:size=640x360:rate=25"
+
+
+def _render(tmp_path, content, source=TESTSRC):
     src = tmp_path / "in.mp4"
     subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-         "testsrc=duration=3:size=640x360:rate=25", "-pix_fmt", "yuv420p", str(src)],
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", source,
+         "-pix_fmt", "yuv420p", str(src)],
         check=True,
     )
     ann = tmp_path / "ann.txt"
@@ -101,6 +105,17 @@ def _run_bad(tmp_path, content):
     "text|0|1|2|3|50|20|14|#000000|#ffffff",
     "blur|1|2|3|4",
     "blur|1|2|3|4|5|6|7",
+    "arrow|0|1|10|10|50|50|4|#ffffff|none",  # too few fields
+    "arrow|0|1|10|10|50|50|4|#ffffff|none|arrow|x",  # too many fields
+    "arrow|0|1|10.5|10|50|50|4|#ffffff|none|arrow",  # non-integer coordinate
+    "arrow|0|1|a|10|50|50|4|#ffffff|none|arrow",
+    "arrow|0|1|10|10|10|10|4|#ffffff|none|arrow",  # identical points
+    "arrow|0|1|10|10|50|50|0|#ffffff|none|arrow",  # thickness out of range
+    "arrow|0|1|10|10|50|50|31|#ffffff|none|arrow",
+    "arrow|0|1|10|10|50|50|x|#ffffff|none|arrow",
+    "arrow|0|1|10|10|50|50|4|red|none|arrow",  # bad colour
+    "arrow|0|1|10|10|50|50|4|#ffffff|dot|arrow",  # unknown style
+    "arrow|a|1|10|10|50|50|4|#ffffff|none|arrow",  # bad time
 ])
 def test_malformed_line_fails_with_line_number(tmp_path, line):
     err = _run_bad(tmp_path, f"# header\ntext|0|1|2|3|50|20|14|#000000|#ffffff|ok\n{line}\n")
@@ -169,3 +184,91 @@ def test_text_is_drawn_at_exactly_the_given_size(tmp_path):
     got = _print_layout(tmp_path, [(text, 100, 60, size, "#000000", "#ffffff")
                                    for size in (8, 14, 40)])
     assert [g[0] for g in got] == [8, 14, 40]
+
+
+def _probe_duration(path):
+    res = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+         str(path)], capture_output=True, text=True, check=True)
+    return float(res.stdout.strip())
+
+
+def test_render_arrow_with_text_and_blur_keeps_the_duration(tmp_path):
+    _render(tmp_path,
+            "text|0.5|2|20|20|300|60|14|#000000|#ffffff|Hello world\n"
+            "blur|1|2.5|100|100|200|100\n"
+            "arrow|0.5|2.5|50|300|400|120|6|#e03131|none|arrow\n"
+            "arrow|1|2|600|40|500|200|10|1E90FF|arrow|arrow\r\n")
+    # shortest=1: the looped overlay image must not make the output longer than the input
+    assert _probe_duration(tmp_path / "out.mp4") == pytest.approx(3.0, abs=0.1)
+
+
+def test_render_blur_after_text_builds_the_graph(tmp_path):
+    _render(tmp_path,
+            "text|0.5|2|20|20|300|60|14|#000000|#ffffff|Hello\n"
+            "blur|0.5|2|10|10|200|100\n")
+
+
+def test_arrow_end_point_beyond_frame_is_rejected(tmp_path):
+    for line in ("arrow|0|1|10|10|641|50|4|#ffffff|none|arrow",
+                 "arrow|0|1|10|361|50|50|4|#ffffff|none|arrow",
+                 "arrow|0|1|-1|10|50|50|4|#ffffff|none|arrow"):
+        with pytest.raises(AssertionError) as exc:
+            _render(tmp_path, line + "\n")
+        assert "outside" in str(exc.value) and "ann.txt:1:" in str(exc.value)
+
+
+def test_arrow_on_the_frame_edge_is_accepted(tmp_path):
+    _render(tmp_path, "arrow|0|1|0|0|640|360|4|#ffffff|none|arrow\n", source=BLACK)
+
+
+def _frame(path, t, w=640, h=360):
+    """Luma (0-255, full range) of the frame at t seconds, as bytes of length w*h."""
+    res = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-ss", str(t), "-i", str(path), "-frames:v", "1",
+         "-f", "rawvideo", "-pix_fmt", "gray", "-vf", "scale=in_range=tv:out_range=pc", "-"],
+        capture_output=True, check=True)
+    assert len(res.stdout) == w * h
+    return res.stdout
+
+
+ARROW_CASES = [
+    # (x1, y1, x2, y2, thickness, start style, end style)
+    (100, 180, 500, 180, 4, "none", "arrow"),  # horizontal
+    (320, 40, 320, 320, 8, "none", "arrow"),  # vertical
+    (80, 60, 560, 300, 6, "none", "arrow"),  # diagonal
+    (560, 300, 80, 60, 6, "none", "arrow"),  # reversed drag
+    (100, 200, 540, 120, 10, "arrow", "arrow"),  # both ends
+    (300, 180, 340, 190, 20, "none", "arrow"),  # very short and thick
+    (200, 100, 440, 100, 12, "none", "none"),  # plain bar
+]
+
+
+@pytest.mark.parametrize("case", ARROW_CASES)
+def test_arrow_is_drawn_only_in_its_time_range_and_matches_the_geometry(tmp_path, case):
+    x1, y1, x2, y2, t, ss, es = case
+    _render(tmp_path, f"arrow|1|2|{x1}|{y1}|{x2}|{y2}|{t}|#ffffff|{ss}|{es}\n", source=BLACK)
+    out = tmp_path / "out.mp4"
+    for time in (0.4, 2.6):  # outside the range: untouched black video
+        assert max(_frame(out, time)) <= 3
+    frame = _frame(out, 1.5)
+    pad = arrowgeom.padding(t)
+    errors = []
+    for y in range(max(min(y1, y2) - pad, 0), min(max(y1, y2) + pad, 359) + 1):
+        for x in range(max(min(x1, x2) - pad, 0), min(max(x1, x2) + pad, 639) + 1):
+            want = arrowgeom.coverage(x + 0.5, y + 0.5, x1, y1, x2, y2, t, ss, es) * 0.5 * 255
+            errors.append(abs(frame[y * 640 + x] - want))
+    assert max(errors) <= 40, max(errors)
+    assert sum(errors) / len(errors) <= 3, sum(errors) / len(errors)
+    assert max(frame) > 110  # the arrow is really there, at about 50%
+    assert max(frame) < 150
+
+
+def test_arrow_colour_is_applied(tmp_path):
+    _render(tmp_path, "arrow|0|2|100|180|500|180|20|#ff0000|none|none\n", source=BLACK)
+    res = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-ss", "1", "-i", str(tmp_path / "out.mp4"),
+         "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-vf",
+         "crop=2:2:300:180", "-"], capture_output=True, check=True)
+    r, g, b = res.stdout[:3]
+    assert r > 100 and g < 25 and b < 25

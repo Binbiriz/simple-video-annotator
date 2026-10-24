@@ -1,12 +1,17 @@
 import pytest
 
 from vidnote import exporter
-from vidnote.models import BLUR, TEXT, Annotation
+from vidnote.models import ARROW, BLUR, TEXT, Annotation
 
 
 def T(start, end, x, y, w, h, text, size=14, box="#000000", color="#ffffff"):
     return Annotation(TEXT, start, end, x, y, w, h, text=text, size=size,
                       box_color=box, text_color=color)
+
+
+def A(start, end, x1, y1, x2, y2, thickness=4, color="#e03131", ss="none", es="arrow"):
+    return Annotation(ARROW, start, end, x1, y1, x2=x2, y2=y2, thickness=thickness,
+                      color=color, start_style=ss, end_style=es)
 
 
 def test_fmt_time():
@@ -133,3 +138,71 @@ def test_saved_lines_are_always_pipe_separated():
                           Annotation(BLUR, 1, 2, 3, 4, 5, 6)])
     for ln in out.splitlines():
         assert ln.startswith(("#", "text|", "blur|"))
+
+
+def test_arrow_roundtrip():
+    items = [
+        A(1, 3, 10, 20, 300, 150),
+        A(2.5, 4, 600, 300, 50, 40, thickness=30, color="#1e90ff", ss="arrow", es="arrow"),
+        A(5, 6, 5, 5, 5, 90, thickness=1, ss="arrow", es="none"),
+        A(7, 8, 0, 0, 1, 1, ss="none", es="none"),
+        T(0, 1, 1, 2, 30, 40, "text stays"),
+        Annotation(BLUR, 9, 10, 1, 2, 3, 4),
+    ]
+    parsed, skipped = exporter.loads(exporter.dumps(items))
+    assert skipped == []
+    assert sorted(parsed, key=lambda a: (a.start, a.end)) == sorted(
+        items, key=lambda a: (a.start, a.end))
+
+
+def test_arrow_dumps_line_and_header():
+    out = exporter.dumps([A(1, 4, 10, 20, 300, 150, thickness=6, color="E03131", ss="arrow")])
+    assert "# arrow|start|end|x1|y1|x2|y2|thickness|color|startstyle|endstyle" in out
+    data = [ln for ln in out.splitlines() if not ln.startswith("#")]
+    assert data == ["arrow|1|4|10|20|300|150|6|#e03131|arrow|arrow"]
+
+
+def test_arrow_parse_normalises_and_ignores_whitespace():
+    parsed, skipped = exporter.loads(
+        "# note\r\n arrow | 1 | 2.5 | 10 | 20 | 30 | 40 | 8 | E03131 | NONE | Arrow \r\n")
+    assert skipped == []
+    assert parsed == [A(1, 2.5, 10, 20, 30, 40, thickness=8, color="#e03131")]
+
+
+ARROW_MALFORMED = [
+    "arrow|1|2|3|4|5|6|4|#ffffff|none",  # too few fields
+    "arrow|1|2|3|4|5|6|4|#ffffff|none|arrow|x",  # too many fields
+    "arrow|1|2|3|4|5|6|4|#ffffff",
+    "arrow|1|2|3.5|4|5|6|4|#ffffff|none|arrow",  # non-integer coordinate
+    "arrow|1|2|a|4|5|6|4|#ffffff|none|arrow",
+    "arrow|1|2|3|4|3|4|4|#ffffff|none|arrow",  # identical points
+    "arrow|1|2|3|4|5|6|0|#ffffff|none|arrow",  # thickness out of range
+    "arrow|1|2|3|4|5|6|31|#ffffff|none|arrow",
+    "arrow|1|2|3|4|5|6|x|#ffffff|none|arrow",
+    "arrow|1|2|3|4|5|6|4|red|none|arrow",  # bad colour
+    "arrow|1|2|3|4|5|6|4|#GGG|none|arrow",
+    "arrow|1|2|3|4|5|6|4|#ffffff|dot|arrow",  # unknown style
+    "arrow|1|2|3|4|5|6|4|#ffffff|none|",
+    "arrow|a|2|3|4|5|6|4|#ffffff|none|arrow",  # bad time
+]
+
+
+@pytest.mark.parametrize("line", ARROW_MALFORMED)
+def test_malformed_arrow_lines_are_rejected_with_a_reason(line):
+    with pytest.raises(ValueError) as exc:
+        exporter.parse_line(line)
+    assert str(exc.value)
+
+
+def test_malformed_arrow_lines_are_skipped_in_a_mixed_file():
+    content = "text|1|2|3|4|50|20|14|#000000|#ffffff|ok\n" + "\n".join(ARROW_MALFORMED) + (
+        "\narrow|1|2|3|4|5|6|4|#ffffff|none|arrow\n")
+    parsed, skipped = exporter.loads(content)
+    assert [a.kind for a in parsed] == [TEXT, ARROW]
+    assert [n for n, _l, _e in skipped] == list(range(2, 2 + len(ARROW_MALFORMED)))
+
+
+def test_unknown_type_message_lists_arrow():
+    with pytest.raises(ValueError) as exc:
+        exporter.parse_line("circle|1|2|3|4")
+    assert "arrow|" in str(exc.value)
