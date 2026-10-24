@@ -7,8 +7,12 @@ on it** to pick coordinates, set start/end times from the player, and add **text
 labels**, **blur regions** or **arrows**. vidnote saves a plain text annotation
 file and can render the result with **ffmpeg**.
 
-```plaintext
-video -> click / drag to pick x, y, w, h (or an arrow's end points) -> annotations.txt -> annotate.sh (ffmpeg) -> output.mp4
+```mermaid
+flowchart TD
+    A["video"] --> B["click / drag to pick x, y, w, h<br/>(or an arrow's end points)"]
+    B --> C["annotations.txt"]
+    C --> D["annotate.sh (ffmpeg)"]
+    D --> E["output.mp4"]
 ```
 
 Built with Python and PySide6 (Qt 6).
