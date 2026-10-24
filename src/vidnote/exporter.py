@@ -2,10 +2,10 @@
 
 Format (one annotation per line, '#' starts a comment):
 
-    text start end x y text...       text annotation
-    blur start end x y w h           blur region
+    text|start|end|x|y|text          text annotation (text may contain '|')
+    blur|start|end|x|y|w|h           blur region
 
-For backward compatibility a text line may also omit the leading 'text' keyword.
+Whitespace around the keyword and each field is ignored.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from .models import BLUR, TEXT, Annotation
 
 HEADER = (
     "# vidnote annotations\n"
-    "# text: text start end x y text\n"
-    "# blur: blur start end x y w h\n"
+    "# text|start|end|x|y|text\n"
+    "# blur|start|end|x|y|w|h\n"
 )
 
 
@@ -29,9 +29,10 @@ def fmt_time(t: float) -> str:
 
 def to_line(a: Annotation) -> str:
     if a.kind == BLUR:
-        return f"blur {fmt_time(a.start)} {fmt_time(a.end)} {a.x} {a.y} {a.w} {a.h}"
+        return "|".join(["blur", fmt_time(a.start), fmt_time(a.end),
+                         str(a.x), str(a.y), str(a.w), str(a.h)])
     text = " ".join(a.text.split())  # single line, collapse whitespace
-    return f"text {fmt_time(a.start)} {fmt_time(a.end)} {a.x} {a.y} {text}"
+    return "|".join(["text", fmt_time(a.start), fmt_time(a.end), str(a.x), str(a.y), text])
 
 
 def parse_line(line: str) -> Optional[Annotation]:
@@ -39,22 +40,28 @@ def parse_line(line: str) -> Optional[Annotation]:
     line = line.strip()
     if not line or line.startswith("#"):
         return None
-    parts = line.split()
+    kind = line.split("|", 1)[0].strip()
     try:
-        if parts[0] == "blur":
+        if kind == "blur":
+            parts = [p.strip() for p in line.split("|")]
             if len(parts) != 7:
-                raise ValueError("blur lines need: blur start end x y w h")
+                raise ValueError("blur lines need: blur|start|end|x|y|w|h")
             s, e = float(parts[1]), float(parts[2])
             x, y, w, h = (int(p) for p in parts[3:7])
             return Annotation(BLUR, s, e, x, y, w, h)
-        if parts[0] == "text":
-            parts = line.split(None, 5)[1:]  # drop the keyword
-        else:
-            parts = line.split(None, 4)  # legacy line without keyword
-        if len(parts) != 5:
-            raise ValueError("text lines need: text start end x y text")
-        return Annotation(TEXT, float(parts[0]), float(parts[1]), int(parts[2]), int(parts[3]),
-                          text=parts[4])
+        if kind == "text":
+            parts = line.split("|", 5)
+            if len(parts) != 6:
+                raise ValueError("text lines need: text|start|end|x|y|text")
+            text = parts[5].strip()
+            if not text:
+                raise ValueError("text is empty")
+            return Annotation(TEXT, float(parts[1]), float(parts[2]), int(parts[3]),
+                              int(parts[4]), text=text)
+        raise ValueError(
+            "unknown line type; expected 'text|...' or 'blur|...' "
+            "(old whitespace-separated lines are no longer supported)"
+        )
     except (ValueError, IndexError) as exc:
         raise ValueError(str(exc) or "invalid line") from exc
 

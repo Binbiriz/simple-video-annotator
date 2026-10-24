@@ -491,8 +491,8 @@ class MainWindow(QMainWindow):
             lines = "\n".join(f"line {n}: {err}" for n, _l, err in skipped[:10])
             QMessageBox.warning(
                 self, "Some lines were skipped",
-                f"{len(skipped)} line(s) could not be read (only numeric x/y are supported "
-                f"in the editor):\n\n{lines}",
+                f"{len(skipped)} line(s) could not be read (expected "
+                f"'text|start|end|x|y|text' or 'blur|start|end|x|y|w|h'):\n\n{lines}",
             )
 
     def render(self) -> None:
