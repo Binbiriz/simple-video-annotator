@@ -12,7 +12,8 @@ PySide6 desktop tool: pick coordinates on a video, write a plain-text annotation
 
 ## Architecture
 
-- `models.py`, `exporter.py` and `colors.py` have no Qt imports (`textfit.py` and `arrowgeom.py` too); keep them that way so tests run without a display.
+- `models.py`, `exporter.py` and `colors.py` have no Qt imports (`textfit.py`, `arrowgeom.py` and `canvasstate.py` too); keep them that way so tests run without a display.
+- `canvasstate.py`: rules for the two yellow canvas graphics (the "new" marker following the form, the selection highlight and its dimmed state). The view only draws what the main window passes to `set_marker` / `set_selected` / `set_selection_dim`.
 - `video_view.py`: `QGraphicsView` whose scene is the video's native pixel space, so `mapToScene()` gives exact video pixels regardless of scaling. Keep annotation coordinates in video pixels.
 - `main_window.py` (the bulk of the GUI) uses `video_view` (draw and select modes, move/resize handles); `colors_dialog.py` edits the box colour list stored in `QSettings`; `__main__:main` is the `vidnote` entrypoint.
 - `textfit.py`: text layout at a user-chosen font size (`layout_text`); there is no auto-fit. `scripts/annotate.sh` mirrors it (`PAD`, `LINE_H_PM`, `ADV_PM`); keep both in sync.
